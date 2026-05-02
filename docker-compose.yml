@@ -1,0 +1,29 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: polymarket_hybrid_bot:0.2.1
+    container_name: polymarket-hybrid-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./scripts:/app/scripts:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "test -f /tmp/.bot_alive && test $$(($$(date +%s) - $$(stat -c %Y /tmp/.bot_alive))) -lt 90 || exit 1",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
