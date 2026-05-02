@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# Weekly report cron helper (Ubuntu / Linux). Edit REPO_ROOT, LOG_GLOB, EXPERIMENT_ID, OUTPUT_APPEND, then:
+# Weekly trades report (v0.2.1+) — runs ``python -m scripts.weekly_report`` which reads
+# ``$BOT_DATA_DIR/trades.jsonl`` and appends Markdown to OUTPUT_APPEND.
+#
+# Edit REPO_ROOT, OUTPUT_APPEND, then:
 #   chmod +x scripts/weekly_report_cron.sh
+#
 # Cron example (Mondays 08:00 UTC):
 #   0 8 * * 1 /path/to/polymarket_hybrid_bot/scripts/weekly_report_cron.sh
+#
+# For Docker-first hosts, prefer: ``docker compose exec -T bot python -m scripts.weekly_report …``
+# (see DEPLOY_DO.md).
 set -euo pipefail
 
 REPO_ROOT="/path/to/polymarket_hybrid_bot"
-LOG_GLOB="/var/log/bot/*.log"
-EXPERIMENT_ID="default"
 OUTPUT_APPEND="/var/log/weekly_report.md"
 
 cd "$REPO_ROOT"
-START=$(date -u -d "7 days ago" +%F)
-END=$(date -u +%F)
+export BOT_MODE="${BOT_MODE:-sim}"
+export BOT_DATA_DIR="${BOT_DATA_DIR:-$REPO_ROOT/data}"
+export BOT_REPORT_DIR="${BOT_REPORT_DIR:-$REPO_ROOT/data/reports}"
 
-BOT_MODE=sim python scripts/weekly_report.py \
-  --logs "$LOG_GLOB" \
-  --start "$START" \
-  --end "$END" \
-  --experiment-id "$EXPERIMENT_ID" \
-  --format markdown >>"$OUTPUT_APPEND" 2>&1
+python3 -m scripts.weekly_report --weeks 1 --format md --stdout >>"$OUTPUT_APPEND" 2>&1
