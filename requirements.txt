@@ -1,0 +1,31 @@
+# ── Polymarket CLOB SDK ───────────────────────────────────────────────────
+py-clob-client>=2.0.0
+
+# ── Async HTTP + WebSocket feeds ──────────────────────────────────────────
+ccxt[async]>=4.2.0          # ccxt.pro WebSocket for Binance/Coinbase spot
+websockets>=12.0             # Polymarket WS subscription
+aiohttp>=3.9.0               # market discovery REST + Telegram/Discord alerts
+
+# ── Web3 / Polygon (optional Layer 4 smart-money copy) ────────────────────
+web3>=6.15.0,<7
+
+# ── Config + validation ───────────────────────────────────────────────────
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.0
+
+# ── Structured logging ────────────────────────────────────────────────────
+structlog>=24.1.0
+
+# ── Prometheus /metrics exposition (optional; disable with BOT_METRICS_ENABLED=false)
+prometheus-client==0.21.1
+
+# ── Numerics (Kelly, z-score, correlation) ────────────────────────────────
+numpy>=1.26.0
+
+# ── Backtesting / analysis (optional, not required at runtime) ────────────
+pandas>=2.0.0
+
+# ── Tests ───────────────────────────────────────────────────────────────────
+pytest>=8.0,<9.0
+pytest-asyncio>=0.23,<1.0

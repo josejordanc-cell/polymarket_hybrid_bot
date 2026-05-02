@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  polymarket-hybrid-bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: polymarket-hybrid-bot
+    restart: unless-stopped
+    env_file:
+      - ../.env          # copy deploy/.env.example → .env and fill values
+    volumes:
+      - ../.market_cache.json:/app/.market_cache.json  # persist market discovery cache
+    ports:
+      - "9091:9091"   # Prometheus /metrics (BOT_METRICS_PORT)
+    # Switch to --live only after paper-trading validation
+    command: ["python", "main.py", "--sim"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
