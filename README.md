@@ -1,19 +1,109 @@
 # polymarket_hybrid_bot
 
-**polymarket_hybrid_bot** is an autonomous Python trading service for **Polymarket** prediction markets. It runs a strict priority loop across three core strategies—intra-market arbitrage (YES+NO edge), spot-lag momentum, and market making—with optional smart-money copy. It operates in **simulation** (paper) or **live** mode against the Polymarket CLOB, with structured logging and Prometheus metrics for operations and dashboards.
+Async Polymarket hybrid strategies (sim default): feeds → risk → priority strategy loop → CLOB execution.
 
-## For developers joining the project
+## v0.2.1 status
 
-Start with **[`docs/HANDOFF.md`](docs/HANDOFF.md)** — architecture, observability contract (logs + `/metrics`), configuration, runbook, and integration notes. **[`docs/FINAL_CODE_REVIEW.md`](docs/FINAL_CODE_REVIEW.md)** and **[`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md)** cover review findings and priorities.
+| Area | Status |
+| --- | --- |
+| Docker build | Fixed — `web3` 7.x + explicit `hexbytes` pin resolves `eth-account===0.13.0` conflict with `py-clob-client==0.22.0` |
+| Strategy loop | OK — look for `strategy_loop_started` in logs after boot |
+| REST (Polymarket / Gamma) | Primary data path |
+| WebSocket (Polymarket CLOB) | **Degraded** — upgrade handshake may return **404**; bot falls back to REST polling |
+| Binance spot feed | **Blocked** in many regions — HTTP **451** from US / most DO POPs; set `DISABLE_BINANCE_FEED=1` and use EU/SG regions if you need ccxt live |
+| Weekly report (`scripts/weekly_report.py`) | Reads `data/trades.jsonl` JSONL; empty / missing file handled gracefully |
 
-## Running tests
+## Quick start
 
-See **[`TESTING.md`](TESTING.md)** for how to run pytest. **[`TESTING_CHECKLIST.md`](TESTING_CHECKLIST.md)** has quick smoke checks (`/metrics`, CLI tools).
+```bash
+git clone <your-fork-url> polymarket_hybrid_bot
+cd polymarket_hybrid_bot
+cp .env.example .env
+# Edit .env — at minimum leave BOT_MODE=sim for first boot.
+./deploy/rebuild.sh
+```
 
-## Deploying
+## Working build commands
 
-See **[`deploy/DEPLOY_DO.md`](deploy/DEPLOY_DO.md)** (DigitalOcean, Docker Compose, env vars, port **9091** for metrics).
+Exact sequence (same as the wrapper, minus log polling):
 
-## What state is this in
+```bash
+docker compose down --remove-orphans
+docker compose build --pull
+docker compose up -d
+docker compose logs -f --tail=50 bot
+```
 
-The project is at **v0.2.0** (pre-dashboard milestone): **sim** mode is the production-stable default for validation; **live** trading is gated on completing **[`docs/VALIDATION_CHECKLIST.md`](docs/VALIDATION_CHECKLIST.md)** and risk sign-off.
+One-command rebuild (blocks until `strategy_loop_started` or times out):
+
+```bash
+./deploy/rebuild.sh              # follow logs on success
+./deploy/rebuild.sh --no-tail    # exit after readiness check
+./deploy/rebuild.sh --nuke       # prune image/build cache before build
+```
+
+## Project layout
+
+```
+polymarket_hybrid_bot/
+├── main.py                 # Async runtime entry (sim/live)
+├── polymarket_hybrid_bot/  # Package shim: python -m polymarket_hybrid_bot.main
+├── config/                 # Pydantic settings (BOT_* env)
+├── data_feeds/             # Polymarket, Binance/Coinbase, Polygon
+├── strategies/             # Arb, momentum, MM, smart-money
+├── execution/              # CLOB executor + sim
+├── deploy/
+│   └── rebuild.sh          # Idempotent compose rebuild + readiness poll
+├── scripts/
+│   ├── weekly_report.py    # trades.jsonl weekly aggregate
+│   └── wallet_reconcile.py
+├── data/                   # Mounted volume — trades.jsonl, reports
+├── logs/                   # Mounted volume
+├── Dockerfile              # Multi-stage builder → slim runtime
+├── docker-compose.yml      # Service `bot`, image polymarket_hybrid_bot:0.2.1
+├── requirements.txt        # Pinned deps (v0.2.1)
+├── HANDOFF.md              # Maintainer handoff
+└── DEPLOY_DO.md            # DigitalOcean droplet guide
+```
+
+## Configuration (`.env.example`)
+
+| Variable | Purpose |
+| --- | --- |
+| `POLY_PK` | Doc alias — set `BOT_POLYMARKET_PRIVATE_KEY` to the same value for live |
+| `POLY_FUNDER` | Funder / proxy wallet (Polymarket L2 flows) |
+| `POLY_SIGNATURE_TYPE` | Signature type hint (see Polymarket docs) |
+| `POLY_HOST` | CLOB HTTP base (alias for `BOT_POLYMARKET_HOST`) |
+| `POLY_CHAIN_ID` | Chain ID (alias for `BOT_CHAIN_ID`) |
+| `POLY_RPC_URL` | Polygon JSON-RPC (alias for `BOT_POLYGON_RPC_URL`) |
+| `BOT_MODE` | `sim` (default) or `live` |
+| `BOT_LOG_LEVEL` | `DEBUG` … `ERROR` |
+| `BOT_DATA_DIR` | Data directory (default `/app/data` in Docker) |
+| `BOT_LOG_DIR` | Log directory (`/app/logs` in Docker) |
+| `BOT_REPORT_DIR` | Weekly report output (`/app/data/reports` in Docker) |
+| `DISABLE_BINANCE_FEED` | Documented workaround for Binance **451** / geo |
+| `SUPPRESS_WS_404_WARNINGS` | Documented toggle for WS **404** noise (REST fallback) |
+
+See `.env.example` for the full `BOT_*` surface (metrics, resolution poll, API keys).
+
+## Known issues
+
+1. **Polymarket WebSocket 404** — The WS upgrade URL may return 404; the bot continues on REST. Not introduced in v0.2.1.
+2. **Binance 451** — Geo / compliance block from several datacenters. Use `fra1` / `sgp1` / `lon1`, or disable Binance feed per env docs. Not introduced in v0.2.1.
+
+## Operations cheatsheet
+
+| Task | Command |
+| --- | --- |
+| Follow logs | `docker compose logs -f bot` |
+| Weekly report (host, repo on disk) | `docker compose exec -T bot python -m scripts.weekly_report --weeks 1 --stdout` |
+| Restart stack | `./deploy/rebuild.sh --no-tail` |
+| Stop | `docker compose down` |
+| Update code | `git pull && ./deploy/rebuild.sh` |
+
+## More documentation
+
+- `HANDOFF.md` — TL;DR + triage for maintainers  
+- `DEPLOY_DO.md` — DigitalOcean sizing, regions, UFW, cron  
+- `CHANGELOG.md` — Release notes  
+- `docs/` — Deeper design notes from pre–v0.2.1 milestones  
