@@ -23,6 +23,7 @@ First-time on a fresh host: `cp .env.example .env`, fill secrets, `chmod 600 .en
 | --- | --- |
 | `requirements.txt` reasoning | Upstream `py-clob-client` / `web3` / `eth-account` metadata on GitHub & PyPI (maintainer sandbox) |
 | `weekly_report` import + pytest fixtures | Local `pytest tests/test_weekly_report.py` |
+| `scripts.wallet_reconcile` import | `python -c "import scripts.wallet_reconcile"` — passes on **web3 7.x** (no `geth_poa_middleware` / POA shim in this tree; `wallet_reconcile_cli` uses plain `Web3.HTTPProvider`). |
 | `rebuild.sh` | `bash -n` (shell syntax) |
 | **Docker image build** | **Deploy host** — Cursor sandboxes often lack Docker / full network; treat first `./deploy/rebuild.sh` on the droplet as acceptance |
 | **`strategy_loop_started` in runtime logs** | **Deploy host** — confirms feeds + loop; depends on Polymarket API reachability |
