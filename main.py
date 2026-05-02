@@ -54,6 +54,23 @@ async def _interruptible_sleep(shutdown: asyncio.Event, seconds: float) -> bool:
         return False
 
 
+async def _docker_alive_touch_loop(shutdown: asyncio.Event) -> None:
+    """Refresh ``/tmp/.bot_alive`` for Docker HEALTHCHECK (mtime-based freshness)."""
+    from pathlib import Path
+
+    import structlog
+
+    log = structlog.get_logger(__name__)
+    path = Path("/tmp/.bot_alive")
+    while not shutdown.is_set():
+        try:
+            path.touch()
+        except OSError as exc:
+            log.debug("docker_alive_touch_failed", error=str(exc))
+        if await _interruptible_sleep(shutdown, 20.0):
+            break
+
+
 # IMPLEMENTATION NOTE — REST polling is intentional for v1 simplicity.
 # If the dashboard requires resolution latency below ~60s, REPLACE this REST
 # poll with a Polygon contract listener that subscribes to UMA/CTF resolution
@@ -362,6 +379,9 @@ async def run_bot(mode: str) -> None:
 
     # ── Start background feed tasks ────────────────────────────────────────
     tasks = [
+        asyncio.create_task(
+            _docker_alive_touch_loop(_SHUTDOWN), name="docker_alive_touch"
+        ),
         asyncio.create_task(pm_feed.run(), name="polymarket_feed"),
         asyncio.create_task(spot_feed.run(), name="spot_feed"),
         asyncio.create_task(polygon_feed.run(), name="polygon_feed"),

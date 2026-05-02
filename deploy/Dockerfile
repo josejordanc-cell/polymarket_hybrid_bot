@@ -1,3 +1,4 @@
+# DEPRECATED — use root ``docker-compose.yml`` and root ``Dockerfile`` (see CHANGELOG v0.2.1).
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

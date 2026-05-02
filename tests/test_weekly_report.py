@@ -1,149 +1,103 @@
-"""Weekly JSON log report (Prompt 7)."""
+"""Tests for v0.2.1 ``scripts/weekly_report`` (trades.jsonl aggregates)."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
-from io import StringIO
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from scripts.weekly_report import (
-    _parse_end_instant_utc,
-    _parse_start_instant_utc,
-    build_report,
-    main,
-)
+from scripts.weekly_report import WeeklyReport, generate_report, main, write_report
 
-FIXTURE = Path(__file__).resolve().parent / "fixtures" / "sample_logs.jsonl"
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "sample_trades.jsonl"
+ANCHOR = datetime(2026, 5, 2, 15, 0, tzinfo=timezone.utc)
 
 
-def _lines():
-    with FIXTURE.open(encoding="utf-8") as f:
-        for lineno, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            yield FIXTURE, lineno, json.loads(line)
-
-
-def test_build_report_sample_fixture_totals() -> None:
-    start = _parse_start_instant_utc("2026-04-26")
-    end = _parse_end_instant_utc("2026-05-02")
-    rep = build_report(_lines(), start, end, "default")
-
-    assert rep["experiment_id"] == "default"
-    assert rep["mode"] == "sim"
-    assert rep["trade_count"] == 18
-    assert rep["strategies"]["intra_arbitrage"]["bundles_completed"] == 3
-    assert rep["incidents"]["polymarket_ws_closed"] == 1
-    assert rep["incidents"]["live_order_rejected"] == 1
-    assert rep["incidents"]["kill_switch_triggered"] == 1
-    assert rep["market_resolved_count"] == 1
-    assert len(rep["arb_unwind_skipped_notes"]) == 1
-
-    # Bundle PnL includes unwind compensation on b-unwind-1
-    arb_total = rep["strategies"]["intra_arbitrage"]["total_pnl_usd"]
-    # Legs + unwind for first bundle; two more bundles without unwind fill
-    b1 = -(45 + 0.09) - (53 + 0.106) + (4.4 - 0.0088)  # SELL unwind
-    b2 = -(20 + 0.04) - (29 + 0.058)
-    b3 = -(33.6 + 0.0672) - (33 + 0.066)
-    assert pytest.approx(arb_total, rel=1e-5) == b1 + b2 + b3
-
-    assert rep["starting_equity_usd"] == 9990.91
-    assert rep["ending_equity_usd"] == 9684.14
-
-
-def test_main_markdown_stdout() -> None:
-    buf = StringIO()
-    code = main(
-        [
-            "--logs",
-            str(FIXTURE),
-            "--start",
-            "2026-04-26",
-            "--end",
-            "2026-05-02",
-            "--experiment-id",
-            "default",
-            "--format",
-            "markdown",
-        ],
-        stdout=buf,
+def test_weekly_report_dataclass_markdown() -> None:
+    r = WeeklyReport(
+        week_start="2026-05-01",
+        week_end="2026-05-02",
+        trades_total=3,
+        trades_filled=2,
+        trades_cancelled=1,
+        realized_pnl_usdc=1.5,
+        unrealized_pnl_usdc=0.0,
+        fees_paid_usdc=0.02,
     )
-    assert code == 0
-    out = buf.getvalue()
-    assert "| Week |" in out
-    assert "intra_arbitrage" in out
-    assert "Arb unwind skipped" in out
+    md = r.to_markdown()
+    assert "Trades (total)" in md
+    assert "| 3 |" in md or "3 |" in md
+    d = r.to_dict()
+    assert d["trades_total"] == 3
 
 
-def test_main_json_parseable() -> None:
-    buf = StringIO()
-    code = main(
-        [
-            "--logs",
-            str(FIXTURE),
-            "--start",
-            "2026-04-26",
-            "--end",
-            "2026-05-02",
-            "--experiment-id",
-            "default",
-            "--format",
-            "json",
-        ],
-        stdout=buf,
+def test_generate_report_sample_fixture_window() -> None:
+    rep = generate_report(weeks=4, now=ANCHOR, trade_log=FIXTURE)
+    assert rep.trades_total == 2
+    assert rep.trades_filled == 1
+    assert rep.trades_cancelled == 1
+    assert rep.realized_pnl_usdc == pytest.approx(1.25)
+    assert rep.fees_paid_usdc == pytest.approx(0.01)
+
+
+def test_generate_report_missing_file_no_raise() -> None:
+    rep = generate_report(weeks=1, now=ANCHOR, trade_log="/no/such/trades.jsonl")
+    assert rep.trades_total == 0
+    assert any("No trade log" in n for n in rep.notes)
+
+
+def test_write_report_json(tmp_path: Path) -> None:
+    rep = WeeklyReport(
+        week_start="2026-05-01",
+        week_end="2026-05-02",
+        trades_total=1,
+        trades_filled=1,
     )
+    p = write_report(rep, fmt="json", out_dir=tmp_path)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["trades_filled"] == 1
+
+
+def test_main_stdout_with_env_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "trades.jsonl").write_text(
+        FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("BOT_REPORT_DIR", str(tmp_path / "out"))
+    code = main(["--weeks", "8", "--format", "json", "--stdout"])
     assert code == 0
-    data = json.loads(buf.getvalue())
-    assert data["best_performer"] in data["strategies"]
 
 
-def test_experiment_id_required_lists_ids() -> None:
+def test_cli_module_invocation_zero_exit(tmp_path: Path) -> None:
+    (tmp_path / "trades.jsonl").write_text(
+        FIXTURE.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    repo = Path(__file__).resolve().parents[1]
     proc = subprocess.run(
         [
             sys.executable,
-            str(Path(__file__).resolve().parents[1] / "scripts" / "weekly_report.py"),
-            "--logs",
-            str(FIXTURE),
-            "--start",
-            "2026-04-26",
-            "--end",
-            "2026-05-02",
+            "-m",
+            "scripts.weekly_report",
+            "--weeks",
+            "8",
             "--format",
             "json",
+            "--stdout",
         ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode == 2
-    assert "arm_a" in proc.stderr
-    assert "default" in proc.stderr
-    assert proc.stdout == ""
-
-
-def test_cli_invocation_matches_acceptance() -> None:
-    proc = subprocess.run(
-        [
-            sys.executable,
-            str(Path(__file__).resolve().parents[1] / "scripts" / "weekly_report.py"),
-            "--logs",
-            str(FIXTURE),
-            "--start",
-            "2026-04-26",
-            "--end",
-            "2026-05-02",
-            "--experiment-id",
-            "default",
-            "--format",
-            "markdown",
-        ],
+        cwd=str(repo),
+        env={
+            **os.environ,
+            "BOT_DATA_DIR": str(tmp_path),
+            "BOT_REPORT_DIR": str(tmp_path / "rep"),
+            "PYTHONPATH": str(repo),
+        },
         capture_output=True,
         text=True,
         check=False,
     )
     assert proc.returncode == 0
-    assert "| Metric | Value |" in proc.stdout
+    out = json.loads(proc.stdout)
+    assert "trades_total" in out

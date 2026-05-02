@@ -1,31 +1,61 @@
-# ── Polymarket CLOB SDK ───────────────────────────────────────────────────
-py-clob-client>=2.0.0
+# =============================================================================
+# polymarket_hybrid_bot — pinned dependencies (v0.2.1)
+# -----------------------------------------------------------------------------
+# Conflict resolution notes (read before bumping):
+#
+#   py-clob-client 0.22.0 pins  eth-account===0.13.0  (strict, triple-equals)
+#   web3           <7.0.0 pins  eth-account<0.13      (incompatible)
+#   web3           >=7.0.0      eth-account>=0.13.0   (compatible)
+#
+# Therefore the fix is to move web3 to the 7.x line, NOT to downgrade eth-account.
+# eth-account 0.13.x in turn requires hexbytes>=1.2.0 and eth-rlp>=2.1.0, which
+# web3 7.x accepts. Pinning hexbytes explicitly avoids the resolver picking
+# hexbytes 0.x (which is what triggered the "hexbytes conflicts" message).
+# =============================================================================
 
-# ── Async HTTP + WebSocket feeds ──────────────────────────────────────────
-ccxt[async]>=4.2.0          # ccxt.pro WebSocket for Binance/Coinbase spot
-websockets>=12.0             # Polymarket WS subscription
-aiohttp>=3.9.0               # market discovery REST + Telegram/Discord alerts
+# --- Polymarket CLOB --------------------------------------------------------
+py-clob-client==0.22.0
 
-# ── Web3 / Polygon (optional Layer 4 smart-money copy) ────────────────────
-web3>=6.15.0,<7
+# --- Ethereum stack (must match py-clob-client's strict pin) ---------------
+eth-account==0.13.0
+eth-utils==4.1.1
+eth-abi==5.1.0
+eth-typing==4.4.0
+eth-rlp==2.1.0
+hexbytes>=1.2.0,<2.0.0
 
-# ── Config + validation ───────────────────────────────────────────────────
-pydantic>=2.6.0
-pydantic-settings>=2.2.0
-python-dotenv>=1.0.0
+# --- Web3 (7.x line — required for eth-account 0.13 compatibility) ---------
+web3==7.6.0
 
-# ── Structured logging ────────────────────────────────────────────────────
+# --- Polymarket order signing ----------------------------------------------
+poly-eip712-structs==0.0.1
+py-order-utils==0.3.2
+
+# --- HTTP / async ----------------------------------------------------------
+httpx==0.27.2
+aiohttp==3.10.10
+websockets==12.0
+requests==2.32.3
+
+# --- Data / strategy -------------------------------------------------------
+pandas==2.2.3
+numpy==1.26.4
+python-dateutil==2.9.0.post0
+pytz==2024.2
+
+# --- Config / runtime ------------------------------------------------------
+python-dotenv==1.0.1
+pyyaml==6.0.2
+loguru==0.7.2
+tenacity==9.0.0
+
+# --- Application stack (this repo; keep compatible with pins above) -------
+pydantic>=2.6.0,<3
+pydantic-settings>=2.2.0,<3
 structlog>=24.1.0
-
-# ── Prometheus /metrics exposition (optional; disable with BOT_METRICS_ENABLED=false)
+ccxt[async]>=4.2.0
 prometheus-client==0.21.1
 
-# ── Numerics (Kelly, z-score, correlation) ────────────────────────────────
-numpy>=1.26.0
-
-# ── Backtesting / analysis (optional, not required at runtime) ────────────
-pandas>=2.0.0
-
-# ── Tests ───────────────────────────────────────────────────────────────────
+# --- Tests -----------------------------------------------------------------
 pytest>=8.0,<9.0
 pytest-asyncio>=0.23,<1.0
