@@ -31,6 +31,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Polymarket WebSocket 404** on upgrade — bot uses **REST polling** fallback.
 - **Binance HTTP 451** from US / many DO regions — document **`DISABLE_BINANCE_FEED=1`** and region selection.
 
+### Deprecated
+
+- **`deploy/Dockerfile`** and **`deploy/docker-compose.yml`** — superseded by the **root** `Dockerfile` and `docker-compose.yml` (v0.2.1 multi-stage build, service `bot`, no obsolete `version:` key). Kept only for reference or old bookmarks; do not use for new deployments.
+
 ### Verification
 
 - ✅ `python -c "from scripts.weekly_report import generate_report, WeeklyReport; …"`  
