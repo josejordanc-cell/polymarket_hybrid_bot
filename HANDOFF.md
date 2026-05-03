@@ -95,3 +95,28 @@ The two `⚠️` rows in the verification table above are now resolved:
   on 2026-05-02 after the eth-stack floor bumps shipped in v0.2.2.
 - **`strategy_loop_started` log line**: ✅ observed at 2026-05-02T23:24:41Z
   with 26 markets discovered.
+
+## v0.2.3 droplet verification (2026-05-03)
+
+The chown quick-fix from `DEPLOY_DO.md` has been applied on the production
+droplet (`root@157.230.63.174`, `/opt/polymarket_hybrid_bot`):
+
+    chown -R 1000:1000 /opt/polymarket_hybrid_bot
+    docker compose up -d   # no-op for compose; bind mount picks up new ownership in the running container
+
+Result, verified at 2026-05-03T05:06Z:
+- `market_cache_write_failed` no longer appears in recent log tails (was firing
+  every cycle before).
+- `equity_reconciliation_disabled` now reports the cleaner reason
+  `BOT_POLYGON_RPC_URL unset` (was `wallet_address_error: Non-hexadecimal
+  digit found`) — confirming the inline-comment cleanup also stuck.
+- `discord_alert_failed` still gone (last seen pre-cleanup).
+- Container `polymarket_hybrid_bot:0.2.1` healthy, sim mode, 32 markets.
+
+The remaining warnings (`Binance 451`, `Polymarket WS 404`) are
+network/upstream issues tracked for v0.3.0 and do not affect the sim-mode
+strategy loop.
+
+The proper fix (deploy as a non-root `bot` user) is still tracked for v0.3.0.
+The chown is a quick fix that will need to be redone if the droplet is
+re-cloned from scratch.
