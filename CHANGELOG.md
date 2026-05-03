@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - ✅ Discord error confirmed gone after `docker compose up -d` recreated the container at 2026-05-03T04:46:26Z.
 - ✅ `strategy_loop_started` observed with 32 markets discovered.
 - ✅ Container running stably at v0.2.2 image; v0.2.3 is docs + template only, no image rebuild required for the env-hygiene piece. (chown step does not require rebuild either.)
+- ✅ chown quick-fix applied on production droplet at 2026-05-03T05:06Z; `market_cache_write_failed` verified gone, container healthy with 32 markets.
 
 ### Known issues unchanged from v0.2.2 (tracked for v0.3.0)
 - Polymarket WebSocket endpoint returns HTTP 404 — REST polling fallback active.
