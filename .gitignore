@@ -39,3 +39,4 @@ bot.log
 
 # Docker
 .docker/
+.env.bak.*

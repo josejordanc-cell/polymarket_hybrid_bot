@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.3] — 2026-05-03
+
+### Added
+- **`.env.example`** rewritten in block-comment style (one comment block above each variable, never inline). Replaces an older inline-comment-style template that taught the wrong pattern.
+- **`.env.bak.*`** added to `.gitignore` to prevent accidental commit of backup files created when editing `.env` in place on a deploy host.
+
+### Fixed
+- **Inline comments parsed as values in `.env` (`discord_alert_failed`, `equity_reconciliation_disabled`).** The env loader treats everything after `=` as the value, including `# comment` text. Three lines on the deploy host had this bug:
+  - `BOT_DISCORD_WEBHOOK_URL=            # Discord channel webhook URL` -> the URL-encoded comment was sent to Discord, producing `discord_alert_failed: "#%20Discord%20channel%20webhook%20URL"`.
+  - `BOT_TELEGRAM_CHAT_ID=               # your chat/channel ID` -> same shape, harmless because Telegram token was also unset.
+  - `BOT_POLYGON_RPC_URL=                # QuickNode / Alchemy Polygon mainnet URL` -> not the cause of the wallet error, but cleaned for consistency. (Wallet error was a separate empty `BOT_POLYGON_WALLET_ADDRESS=` issue, deferred.)
+
+  Fixed on the running droplet by stripping inline comments and recreating the container (`docker compose up -d`, not `restart` — env vars are baked at container creation, not at process start). `discord_alert_failed` is gone; reconciliation now reports the cleaner reason `BOT_POLYGON_RPC_URL unset` instead of `Non-hexadecimal digit found`.
+
+- **`market_cache_write_failed: [Errno 13] Permission denied`.** The bot runs as UID 1000 inside the container, but `/opt/polymarket_hybrid_bot` was cloned as root on the droplet. Documented the chown one-liner fix in `DEPLOY_DO.md`. The proper fix (running as a non-root deploy user) remains tracked for v0.3.0.
+
+### Verified
+- ✅ Discord error confirmed gone after `docker compose up -d` recreated the container at 2026-05-03T04:46:26Z.
+- ✅ `strategy_loop_started` observed with 32 markets discovered.
+- ✅ Container running stably at v0.2.2 image; v0.2.3 is docs + template only, no image rebuild required for the env-hygiene piece. (chown step does not require rebuild either.)
+
+### Known issues unchanged from v0.2.2 (tracked for v0.3.0)
+- Polymarket WebSocket endpoint returns HTTP 404 — REST polling fallback active.
+- Binance reference feed returns HTTP 451 from US/DigitalOcean regions — set `DISABLE_BINANCE_FEED=1` to silence.
+- Equity reconciliation still disabled until `BOT_POLYGON_WALLET_ADDRESS` and `BOT_POLYGON_RPC_URL` are filled in (deferred to live-mode switchover).
+
 ## [0.2.2] — 2026-05-02
 
 ### Fixed

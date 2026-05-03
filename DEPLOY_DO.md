@@ -56,3 +56,37 @@ git pull
 | WS 404 spam | Expected; REST fallback — see `README.md` |
 | Healthcheck failing | Ensure `/tmp/.bot_alive` is touched (runtime heartbeat task); check `docker inspect` health |
 | No trades in weekly report | `data/trades.jsonl` missing or empty — writer may not exist yet |
+
+## Running as root on the droplet (current state)
+
+The deploy host currently runs the bot as `root` and clones `/opt/polymarket_hybrid_bot`
+as `root`. This works but produces one warning at startup:
+
+    {"error": "[Errno 13] Permission denied: '.market_cache.json'",
+     "event": "market_cache_write_failed", "level": "warning"}
+
+The bot process inside the container runs as UID 1000 (`bot`), so it can't write
+the market cache to a root-owned bind mount. Two ways to fix:
+
+### Quick fix — chown the deploy tree
+
+    chown -R 1000:1000 /opt/polymarket_hybrid_bot
+    docker compose up -d
+
+The `up -d` (not `restart`) is required to recreate the container so the new
+ownership is picked up by the bind mount. After this, `market_cache_write_failed`
+should not appear in the logs.
+
+### Proper fix — deploy as a non-root user (deferred to v0.3.0)
+
+Create a `bot` user on the host with UID 1000, clone the repo as that user,
+and SSH in as `bot` for all deploy operations. This eliminates the root-owned
+working tree entirely and matches the in-container UID.
+
+Steps (rough sketch — full procedure tracked for v0.3.0):
+
+    adduser --uid 1000 --disabled-password --gecos "" bot
+    usermod -aG docker bot
+    su - bot -c 'git clone https://github.com/<owner>/polymarket_hybrid_bot.git ~/polymarket_hybrid_bot'
+
+Then deploy from `~/polymarket_hybrid_bot` as `bot`, not from `/opt` as `root`.
