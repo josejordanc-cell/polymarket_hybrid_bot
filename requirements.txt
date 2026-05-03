@@ -3,9 +3,14 @@
 # -----------------------------------------------------------------------------
 # Conflict resolution notes (read before bumping):
 #
-#   py-clob-client 0.22.0 pins  eth-account===0.13.0  (strict, triple-equals)
-#   web3           <7.0.0 pins  eth-account<0.13      (incompatible)
-#   web3           >=7.0.0      eth-account>=0.13.0   (compatible)
+#   py-clob-client 0.22.0  -> eth-account>=0.13.0   (loose floor)
+#   web3 7.6.0             -> eth-account>=0.13.1, eth-typing>=5.0.0,
+#                             eth-abi>=5.0.1        (raised in 7.x)
+#   eth-utils 5.x line     -> required for eth-typing 5.x compatibility
+#
+# v0.2.2 update: web3 7.6.0's floors are higher than what v0.2.1 pinned.
+# Verified resolving + building cleanly + strategy_loop_started observed
+# on Ubuntu 24.04 + Python 3.11 deploy host on 2026-05-02.
 #
 # Therefore the fix is to move web3 to the 7.x line, NOT to downgrade eth-account.
 # eth-account 0.13.x in turn requires hexbytes>=1.2.0 and eth-rlp>=2.1.0, which
@@ -17,10 +22,10 @@
 py-clob-client==0.22.0
 
 # --- Ethereum stack (must match py-clob-client's strict pin) ---------------
-eth-account==0.13.0
-eth-utils==4.1.1
-eth-abi==5.1.0
-eth-typing==4.4.0
+eth-account==0.13.7
+eth-utils==5.3.0
+eth-abi==5.2.0
+eth-typing==5.2.1
 eth-rlp==2.1.0
 hexbytes>=1.2.0,<2.0.0
 

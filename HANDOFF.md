@@ -64,3 +64,34 @@ First-time on a fresh host: `cp .env.example .env`, fill secrets, `chmod 600 .en
 1. **WebSocket migration** — When Polymarket ships a stable WS URL, re-enable and drop REST-only hot paths where safe.
 2. **Reference price diversification** — Reduce reliance on Binance when `DISABLE_BINANCE_FEED=1` (midpoint-only / multi-venue).
 3. **Hash-pinning** — Consider `pip hash` / lockfile for fully reproducible CI once the 7.x stack stabilizes.
+
+## Open issues for v0.2.3 (observed in v0.2.2 running container)
+
+These three are config/ownership issues, not code bugs. They don't block
+v0.2.2 acceptance but should be fixed before the bot moves out of sim mode.
+
+1. **`discord_alert_failed`** — `DISCORD_WEBHOOK_URL` in `.env` is set to
+   the literal placeholder `# Discord channel webhook URL`. Either fill it
+   in or remove the line.
+
+2. **`equity_reconciliation_disabled: Non-hexadecimal digit found`** — the
+   funder address env var has stray characters (likely whitespace, quotes,
+   or the placeholder). Reconciliation is disabled until this is fixed,
+   so PnL won't be cross-checked against on-chain balances.
+
+3. **`market_cache_write_failed: [Errno 13] Permission denied`** — bot runs
+   as UID 1000 (`bot`) but `/opt/polymarket_hybrid_bot` was cloned as root
+   on the droplet. Fix is one of:
+   - `chown -R 1000:1000 /opt/polymarket_hybrid_bot` (quick fix), or
+   - Move the cache path to `/app/data/.market_cache.json` (clean fix —
+     `data/` is already a writable bind mount), or
+   - Stop running the deploy as root and clone as a non-root `bot` user
+     per `DEPLOY_DO.md` (correct fix).
+
+### v0.2.2 verification status update
+
+The two `⚠️` rows in the verification table above are now resolved:
+- **Docker build**: ✅ verified on production droplet (Ubuntu 24.04, NYC1)
+  on 2026-05-02 after the eth-stack floor bumps shipped in v0.2.2.
+- **`strategy_loop_started` log line**: ✅ observed at 2026-05-02T23:24:41Z
+  with 26 markets discovered.

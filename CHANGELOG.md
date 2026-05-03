@@ -4,6 +4,27 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] — 2026-05-02
+
+### Fixed
+- **Dependency resolution failure under web3 7.6.0.** v0.2.1's pin set was internally consistent for the conflict it solved (web3 6.x → 7.x), but pinned the rest of the eth-stack at versions that web3 6.x accepted and 7.x no longer does. The first build attempt on the deploy host failed with three sequential resolver errors (`eth-account==0.13.0` vs `web3 7.6.0` floor of `>=0.13.1`; then `eth-typing==4.4.0` vs floor of `>=5.0.0`; then transitively `eth-utils==4.1.1` and `eth-abi==5.1.0`). Resolution: bump all four to versions matching the 7.x line:
+  - `eth-account` 0.13.0 → 0.13.7
+  - `eth-typing` 4.4.0 → 5.2.1
+  - `eth-utils` 4.1.1 → 5.3.0
+  - `eth-abi` 5.1.0 → 5.2.0
+
+  `eth-rlp==2.1.0` and `hexbytes>=1.2.0,<2.0.0` are unchanged — both already satisfied 7.x's floors.
+
+### Verified
+- ✅ End-to-end `docker compose up -d --build` succeeded on the production droplet (Ubuntu 24.04, 1 vCPU / 1 GB + 1 GB swap, NYC1).
+- ✅ `strategy_loop_started` observed in container logs at 2026-05-02T23:24:41Z, with 26 markets discovered.
+- ✅ Container running stably; REST polling fallback active for the WS 404 known issue.
+
+### Known issues observed in running container (deferred to v0.2.3)
+- `discord_alert_failed` — `.env` has the placeholder comment `# Discord channel webhook URL` being parsed as the value. Either set `DISCORD_WEBHOOK_URL` to a real webhook or remove the line.
+- `equity_reconciliation_disabled: wallet_address_error: "Non-hexadecimal digit found"` — funder address env var contains stray characters.
+- `market_cache_write_failed: Permission denied` — bot runs as UID 1000 but `/opt/polymarket_hybrid_bot` is owned by root. Fix is to chown the deploy tree or move the cache to `/app/data/`.
+
 ## [0.2.1] — 2026-05-02
 
 ### Fixed
