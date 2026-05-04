@@ -150,12 +150,15 @@ class MetricsExporter:
         self._equity_drift_pct.labels(**static).set(0.0)
 
     def start(self, port: int) -> None:
+        """
+        Start the background /metrics HTTP server on 127.0.0.1 only (not all interfaces).
+        """
         from prometheus_client import start_http_server
 
         with self._lock:
             if self._started:
                 return
-            start_http_server(port, registry=self._registry)
+            start_http_server(port, addr="127.0.0.1", registry=self._registry)
             self._started = True
 
     def update_equity(self, value: float) -> None:
