@@ -2,6 +2,37 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="$ROOT/.env"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+    cat >&2 <<'EOF'
+ERROR: .env is missing.
+
+Copy the example file, fill in all [SECRET] fields, then lock down permissions:
+
+  cp .env.example .env
+  $EDITOR .env
+  chmod 600 .env
+EOF
+    exit 1
+fi
+
+env_mode=""
+if env_mode=$(stat -c '%a' "$ENV_FILE" 2>/dev/null); then
+    :
+elif env_mode=$(stat -f '%A' "$ENV_FILE" 2>/dev/null); then
+    :
+else
+    echo "ERROR: could not read .env file mode (stat failed)." >&2
+    exit 1
+fi
+
+if [[ "$env_mode" != "600" ]]; then
+    echo "ERROR: .env must have mode 600 (found ${env_mode}). World-readable .env files leak credentials." >&2
+    echo "Fix with:  chmod 600 .env" >&2
+    exit 1
+fi
+
 cd "$ROOT"
 
 NO_TAIL=false
@@ -35,16 +66,6 @@ fi
 if ! docker compose version >/dev/null 2>&1; then
     echo "docker compose (v2) not available" >&2
     exit 1
-fi
-
-if [[ ! -f .env ]]; then
-    if [[ -f .env.example ]]; then
-        cp .env.example .env
-        echo "WARN: created .env from .env.example — edit secrets before live trading." >&2
-    else
-        echo "ERROR: .env missing and no .env.example to copy." >&2
-        exit 1
-    fi
 fi
 
 docker compose down --remove-orphans
