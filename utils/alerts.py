@@ -58,7 +58,7 @@ async def _send_telegram(text: str) -> None:
         async with aiohttp.ClientSession() as session:
             await session.post(
                 url,
-                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+                json={"chat_id": chat_id, "text": text},
                 timeout=aiohttp.ClientTimeout(total=5),
             )
     except Exception as exc:
