@@ -50,8 +50,15 @@ class RiskConfig(BaseSettings):
     max_trade_pct: float = Field(default=0.08, ge=0.05, le=0.10)
     # Daily drawdown kill-switch (fraction, e.g. 0.12 = 12 %)
     daily_drawdown_limit_pct: float = Field(default=0.12, ge=0.03, le=0.30)
-    # Fractional Kelly multiplier (0.25 = quarter-Kelly, conservative)
-    kelly_fraction: float = Field(default=0.25, ge=0.05, le=1.0)
+    kelly_fraction: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=0.50,
+        description=(
+            "Kelly multiplier; quarter-Kelly default. Hard cap 0.50; "
+            "full Kelly is rejected as operationally ruinous."
+        ),
+    )
     # Correlation gate: block new trades when |corr| > threshold
     max_pair_correlation: float = Field(default=0.80, ge=0.0, le=1.0)
     # Maximum simultaneous open positions
