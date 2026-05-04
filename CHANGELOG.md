@@ -1,3 +1,52 @@
+## [Unreleased]
+
+Post-v0.2.4 security and hygiene fixes. All four changes are deployed
+to production (sim mode) and verified end-to-end. A v0.2.5 release tag
+will be cut once the in-flight `.market_cache.json` write-path fix
+(T10) lands.
+
+### Changed
+
+- `observability/metrics_exporter.py`: bound the Prometheus HTTP
+  exporter to `127.0.0.1` so the metrics endpoint is no longer
+  reachable from the public network interface, closing the
+  unauthenticated-metrics exposure flagged in the v2 security review.
+  (PR #9, commit 0623eb4 — "T1")
+- `config/settings.py` and `.env.example`: capped
+  `BotRiskConfig.kelly_fraction` at `0.50` (the upper bound was `1.0`
+  i.e. full Kelly). The lower bound of `0.05` is preserved. The
+  `.env.example` comment now documents the 0.05–0.50 range explicitly.
+  (PR #10, commit 9af6254 — "T2")
+- `deploy/rebuild.sh`: fail-fast guards added at the top of the
+  script. The script now exits 1 with a remediation hint if `.env` is
+  missing (with copy/edit/chmod instructions) or if `.env` is not mode
+  600. The mode check uses a dual `stat` fallback (`stat -c '%a'` on
+  Linux, `stat -f '%A'` on BSD/macOS) so the guard works for both
+  droplet and local runs. The previous behaviour of auto-creating
+  `.env` from `.env.example` has been removed because it was masking
+  this failure mode. (PR #11, commit 0eccb66 — "T6")
+
+### Added
+
+- `data_feeds/binance_feed.py`: new `BOT_DISABLE_BINANCE_FEED`
+  environment flag (accepts `1`/`true`/`yes`, case-insensitive). When
+  set, `_run_venue` returns early for `venue == "binance"` only —
+  Coinbase and other venues are unaffected — and emits a single
+  `binance_feed_disabled` INFO log line with the reason. This is the
+  real disable mechanism that was queued for v0.3.0 in the v0.2.4
+  changelog. In production from a US/DO IP, enabling the flag
+  eliminated ~1500 `spot_feed_tick_error` (HTTP 451) events per hour
+  with zero impact on the strategy loop. `.env.example` documents the
+  flag in a new block immediately after `BOT_BINANCE_SYMBOLS`.
+  (PR #12, commit 6a2e9ed — "T11")
+
+### Security
+
+- The four changes above each close a discrete finding from the v2
+  documentation security review. See `docs/SECURITY_REVIEW.md` §0.1.1
+  ("Mitigation log — 2026-05-04 post-tag patches") for the per-finding
+  status update.
+
 ## v0.2.4 — 2026-05-04
 
 Security hardening release. No application code changes; all changes are
