@@ -17,6 +17,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - market_cache_data:/app/data
       - ./scripts:/app/scripts:ro
 
     # NOTE: `read_only: true` and a tmpfs mount for /tmp are intentionally
@@ -68,6 +69,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
+
+volumes:
+  market_cache_data:
 
 networks:
   bot_net:
