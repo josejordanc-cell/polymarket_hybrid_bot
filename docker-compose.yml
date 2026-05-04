@@ -16,15 +16,14 @@ services:
 
     volumes:
       - ./logs:/app/logs
-      - ./data:/app/data
+      - market_cache_data:/app/data
       - ./scripts:/app/scripts:ro
 
     # NOTE: `read_only: true` and a tmpfs mount for /tmp are intentionally
-    # OMITTED in this revision. The bot currently writes its market cache
-    # to `/app/.market_cache.json` (image-root path), which would fail under
-    # a read-only root filesystem. Once the v0.3.0 code change moves the
-    # cache to `/app/data/market_cache.json` (a bind-mounted writable
-    # directory), add the following block back here:
+    # omitted. The markets discovery cache (default path under /app/data/,
+    # see BOT_MARKET_CACHE_PATH) persists on the named volume
+    # `market_cache_data` mounted here. Revisit a read-only root once every
+    # runtime write path uses a mounted or tmpfs location; then consider:
     #
     #   read_only: true
     #   tmpfs:
@@ -68,6 +67,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
+
+volumes:
+  market_cache_data:
 
 networks:
   bot_net:

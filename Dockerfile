@@ -53,6 +53,8 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=bot:bot . /app
 
+RUN mkdir -p /app/data && chown -R bot:bot /app/data
+
 USER bot
 
 # tini is PID 1 — it reaps zombies and forwards SIGTERM to the bot,

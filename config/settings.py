@@ -6,6 +6,7 @@ All values are env-driven (prefix BOT_) with safe simulation defaults.
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -181,6 +182,15 @@ class BotConfig(BaseSettings):
     polygon_wallet_address: str = Field(
         default="",
         validation_alias="BOT_POLYGON_WALLET_ADDRESS",
+    )
+
+    market_cache_path: Path = Field(
+        default=Path("/app/data/market_cache.json"),
+        description=(
+            "Filesystem path for the markets discovery cache. "
+            "Parent directory will be auto-created on write."
+        ),
+        validation_alias="BOT_MARKET_CACHE_PATH",
     )
 
     @model_validator(mode="after")

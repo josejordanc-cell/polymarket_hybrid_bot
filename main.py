@@ -628,7 +628,7 @@ async def _load_or_discover_markets(config, logger) -> list[dict]:
     import time as _time
     from pathlib import Path
 
-    cache_path = Path(".market_cache.json")
+    cache_path = config.market_cache_path
     cache_ttl = 3600  # 1 hour
 
     if cache_path.exists():
@@ -666,6 +666,7 @@ async def _load_or_discover_markets(config, logger) -> list[dict]:
 
     if markets:
         try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(json.dumps(markets))
             logger.info("market_cache_written", count=len(markets))
         except Exception as exc:
