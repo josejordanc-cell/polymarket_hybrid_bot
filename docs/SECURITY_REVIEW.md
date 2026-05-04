@@ -42,7 +42,7 @@ The repo's documentation is genuinely better than typical for a personal trading
 | 8 | MEDIUM | Metrics endpoint binds `0.0.0.0` by design; safe today only because compose doesn't publish 9091. One stray `-p 9091:9091` exposes it. No auth on metrics | `.env.example`, `docker-compose.yml` | §5 |
 | 9 | MEDIUM | Telegram token, Discord webhook, Polygon RPC URL are documented as if they were configuration; they are secrets and should be labelled and handled as such | `.env.example` | §5 |
 | 10 | MEDIUM | `.env` inline-comment-after-value pattern (root cause of the v0.2.2 incident) survived in the deployed `.env`. **Mitigated 2026-05-04** on the droplet (14 → 0); same fix needs to land in `.env.example` so new deploys don't reintroduce it | `.env`, `.env.example` | §5 |
-| 11 | LOW | Bot persists market cache to `/app/.market_cache.json` (image-root path), not to a bind-mounted writable directory. Symptom: repeated `market_cache_write_failed` warnings on a non-root deploy. **Worked around 2026-05-04** by `chown bot:bot /app/` in the running container; durable fix is to move the cache file path to `/app/data/market_cache.json` in code | code path | §4 |
+| 11 | LOW (mitigated) | Bot persists market cache to `/app/.market_cache.json` (image-root path), not to a bind-mounted writable directory. Symptom: repeated `market_cache_write_failed` warnings on a non-root deploy. **Worked around 2026-05-04** by `chown bot:bot /app/` in the running container; durable fix is to move the cache file path to `/app/data/market_cache.json` in code **Mitigated 2026-05-04** by T10 (PR #14) — see §0.1.1. | code path | §4 |
 | 12 | LOW | No structured guidance on log redaction (private keys, wallet addresses, JWTs, signed messages) — trading bots routinely leak these by accident in stack traces | repo-wide | §11 |
 | 13 | LOW | No CI security checks documented (gitleaks, pip-audit, hadolint, trivy) | repo-wide | §11 |
 | 14 | LOW | No dashboard-integration auth model defined yet; the `BOT_METRICS_*` surface is the natural anchor for this and should be designed before any dashboard work begins | docs gap | §11 |
@@ -107,7 +107,7 @@ This section documents what was actually done on the production droplet during t
 
 8. **Reboot.** Reconnected via key (passphrase prompt), confirmed kernel `6.8.0-111-generic` running, 0 updates pending, fail2ban active, bot container `Up 2 minutes (healthy)`. Strategy loop emitted `strategy_loop_started` with `markets: 46, mode: sim` at `2026-05-04T18:21:26Z`.
 
-9. **Cache-permission warning silenced** by `docker exec -u root polymarket-hybrid-bot chown bot:bot /app/`. Reasoning: container runs as `uid=1000(bot)`, host bind mount at `/opt/polymarket_hybrid_bot` is already `1000:1000`, but the image ships `/app/` as `root:root` so the bot can't create files at the image-root path. Post-chown, no `market_cache_write_failed` events in a 3-minute log window. **This fix is ephemeral** — it does not survive container recreation. Tracked as a v0.3.0 ticket: change the bot to write its cache to `/app/data/market_cache.json` (which is a bind mount and properly owned).
+9. **Cache-permission warning silenced** by `docker exec -u root polymarket-hybrid-bot chown bot:bot /app/`. Reasoning: container runs as `uid=1000(bot)`, host bind mount at `/opt/polymarket_hybrid_bot` is already `1000:1000`, but the image ships `/app/` as `root:root` so the bot can't create files at the image-root path. Post-chown, no `market_cache_write_failed` events in a 3-minute log window. **This fix is ephemeral** — it does not survive container recreation. Tracked as a v0.3.0 ticket: change the bot to write its cache to `/app/data/market_cache.json` (which is a bind mount and properly owned). **Update 2026-05-04, post-tag:** the durable fix landed as T10 (PR #14, commit `82908ec`) — cache path moved to `/app/data/market_cache.json` (configurable via `BOT_MARKET_CACHE_PATH`), backed by a `market_cache_data` Docker named volume. The ephemeral chown workaround is no longer needed and the v0.3.0 ticket is closed.
 
 10. **`.env` inline-comment cleanup.** Scanned `/opt/polymarket_hybrid_bot/.env` for the v0.2.2 footgun pattern (`KEY=VALUE   # comment`). Found 14 lines (`BOT_MODE`, `BOT_LOG_LEVEL`, `BOT_SIM_SLIPPAGE_BPS`, `BOT_METRICS_ENABLED`, `BOT_METRICS_PORT`, `BOT_POLYMARKET_PRIVATE_KEY`, `BOT_POLYMARKET_API_KEY`, `BOT_RISK_MAX_TRADE_PCT`, `BOT_RISK_DAILY_DRAWDOWN_LIMIT_PCT`, `BOT_RISK_KELLY_FRACTION`, `BOT_RISK_MIN_ORDER_USD`, `BOT_STRAT_SMART_MONEY_ENABLED`, `BOT_STRAT_MIN_ARB_EDGE`, `BOT_TELEGRAM_TOKEN`). Rewrote each to put the comment on its own line above the assignment. Backup at `.env.bak.before-comment-cleanup-20260504-184119`. Post-scan returned 0 hits. **The running container still parses the old, messy file** — Pydantic-Settings reads `.env` once at process start. Restart deferred until the next change-batch (this is just a `docker compose restart bot`, ~5-second outage).
 
@@ -137,7 +137,7 @@ This audit is the basis for declining the v1 "rotate every secret" recommendatio
 
 ## 0.1.1 Mitigation log — 2026-05-04 post-tag patches
 
-After the v0.2.4 release tag, four additional fixes were merged on
+After the v0.2.4 release tag, five additional fixes were merged on
 `main` and deployed to production (sim mode). Each closes a finding
 flagged in this review.
 
@@ -147,15 +147,20 @@ flagged in this review.
 | `kelly_fraction` upper bound permits full-Kelly bankroll allocation | `BotRiskConfig.kelly_fraction` capped at `le=0.50` (floor `ge=0.05` preserved) | PR #10, commit `9af6254` | MITIGATED |
 | `deploy/rebuild.sh` did not validate `.env` mode or presence | Fail-fast guards added: missing `.env` → exit 1 with remediation hint; non-600 mode → exit 1; dual `stat` fallback (Linux + BSD/macOS) | PR #11, commit `0eccb66` | MITIGATED |
 | `BOT_BINANCE_SYMBOLS=[]` does not actually disable the Binance feed (pydantic-settings v2 ignores empty-list env values) | New `BOT_DISABLE_BINANCE_FEED` env flag in `data_feeds/binance_feed.py`; emits `binance_feed_disabled` INFO log; in production, eliminated ~1500 `spot_feed_tick_error` events/hour from a US/DO IP | PR #12, commit `6a2e9ed` | MITIGATED |
+| `.market_cache.json` write path is `/app/` (image root, read-only for `bot`); ephemeral chown applied 2026-05-04 was not durable across container recreation | New `BOT_MARKET_CACHE_PATH` (default `/app/data/market_cache.json`); auto-mkdir; Dockerfile creates `/app/data/` owned by `bot`; docker-compose mounts `market_cache_data` named volume so cache survives rebuilds | PR #14, commit `82908ec` | MITIGATED |
 
 Verification on the production droplet (157.230.63.174, `sim` mode):
-all four changes confirmed working end-to-end via direct
-`/proc/net/tcp` inspection (T1), startup boot test (T2), three rebuild.sh
-guard paths (T6), and a paired regression/kill-switch test showing 25
-`spot_feed_tick_error` events/min before vs. 0 after (T11).
+all five changes confirmed working end-to-end via direct
+`/proc/net/tcp` inspection (T1), startup boot test (T2), three
+rebuild.sh guard paths (T6), a paired regression/kill-switch test
+showing 25 `spot_feed_tick_error` events/min before vs. 0 after (T11),
+and post-deploy mount/ownership/JSON-validity inspection plus a
+follow-up rebuild proving cache persistence via `market_cache_hit` on
+re-start (T10).
 
 A v0.2.5 release tag has not yet been cut. Tagging is deferred until
-the in-flight `.market_cache.json` write-path fix (T10) lands, so
+the remaining Phase 1 / Phase 2 hardening items in
+`CURSOR_TASKS_v0.2.4.md` (T3, T4, T5, T7, T9, T12, T13) land, so
 v0.2.5 can be a single coherent "post-tag hardening" release.
 
 ---
@@ -829,7 +834,7 @@ networks:
       com.docker.network.bridge.name: br-pmbot
 ```
 
-**Note on `read_only`:** if any code path writes to e.g. `/app/.cache/`, `/home/bot/.cache/`, or similar, it will fail. The bot already writes its market cache via the `data/` bind mount per the v0.2.3 fix — *but the 2026-05-04 session showed the `.market_cache.json` is in fact written to `/app/`, not `/app/data/`*, which means under `read_only: true` the cache write will fail outright (instead of just warning, as today). This compose change therefore has a hard dependency on the v0.3.0 code change moving the cache to `/app/data/`. **Do not merge this compose hardening before that code change ships, or sequence it as a single PR that ships both.**
+**Note on `read_only`:** if any code path writes to e.g. `/app/.cache/`, `/home/bot/.cache/`, or similar, it will fail. The bot already writes its market cache via the `data/` bind mount per the v0.2.3 fix — *the 2026-05-04 session worked around this with an ephemeral chown, and T10 (PR #14, commit `82908ec`) shipped the durable fix moving the cache to `/app/data/market_cache.json`*. This compose change is now safe to ship — the cache path dependency was resolved in T10. **The remaining concern is that any OTHER code path writing under `/app/` (outside `/app/data/`, `/app/logs/`, `/app/scripts/`, `/tmp`) will fail under `read_only: true`; review before merging.**
 
 If you want the rest of the compose hardening (cap_drop, no-new-privs, limits, dedicated network) before the cache-path code change, drop just `read_only: true` and `tmpfs` from this replacement; the others have no such dependency.
 
@@ -1323,7 +1328,7 @@ docker run --rm -v "$PWD:/repo" aquasec/trivy fs --severity HIGH,CRITICAL /repo
 | 5 | §5 — `.env.example` updates (relabel secrets, add metrics binding/auth, remove default bankroll, sweep inline-comment pattern) | HIGH | S | docs/code |
 | 6 | §4 — `DEPLOY_DO.md` rewrite (Cloud FW, fail2ban procedure, off-host logs, backups, patching cadence — most of this is already real on the host, just needs to be the doc of record) | HIGH | M | ops/docs |
 | 7 | Migrate the production deploy from root to non-root `bot` user (procedure already in revised `DEPLOY_DO.md`) | HIGH | M | ops |
-| 8 | Move `.market_cache.json` write path to `/app/data/market_cache.json` in code (durable replacement for C7); also fixes the `read_only: true` blocker in §7 | MEDIUM | S | code |
+| 8 ✅ DONE | Move `.market_cache.json` write path to `/app/data/market_cache.json` in code (durable replacement for C7); also fixes the `read_only: true` blocker in §7 **Done 2026-05-04 as T10 (PR #14, commit `82908ec`).** | MEDIUM | S | code |
 | 9 | §7 — docker-compose hardening (cap_drop, no-new-privs, limits, dedicated network now; add `read_only` + tmpfs after item 8 ships) | MEDIUM | S | docs/code |
 | 10 | §8 — Dockerfile digest pin + tini + OCI labels + `COPY --chown=bot:bot` | MEDIUM | S | docs/code |
 | 11 | Container restart on the production droplet to pick up the cleaned `.env` (~5-second outage, batch with PR for items 1-5) | LOW | S | ops |

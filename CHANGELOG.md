@@ -1,9 +1,10 @@
 ## [Unreleased]
 
-Post-v0.2.4 security and hygiene fixes. All four changes are deployed
-to production (sim mode) and verified end-to-end. A v0.2.5 release tag
-will be cut once the in-flight `.market_cache.json` write-path fix
-(T10) lands.
+Post-v0.2.4 security and hygiene fixes. All six changes below are
+deployed to production (sim mode) and verified end-to-end. A v0.2.5
+release tag will be cut once the remaining Phase 1 / Phase 2 hardening
+items in `CURSOR_TASKS_v0.2.4.md` land, so v0.2.5 is a single coherent
+"post-tag hardening" release.
 
 ### Removed
 
@@ -38,6 +39,16 @@ will be cut once the in-flight `.market_cache.json` write-path fix
   droplet and local runs. The previous behaviour of auto-creating
   `.env` from `.env.example` has been removed because it was masking
   this failure mode. (PR #11, commit 0eccb66 — "T6")
+- `main.py`, `config/settings.py`, `Dockerfile`, `docker-compose.yml`,
+  `.env.example`: moved the markets discovery cache from
+  `/app/.market_cache.json` (image root, read-only for the `bot` user)
+  to `/app/data/market_cache.json`, configurable via the new
+  `BOT_MARKET_CACHE_PATH` env var. Backed by a `market_cache_data`
+  Docker named volume so the cache survives image rebuilds. The
+  Dockerfile creates `/app/data/` owned by `bot:bot` before `USER bot`.
+  Closes the recurring `market_cache_write_failed: [Errno 13]
+  Permission denied` warning at every startup. (PR #14, commit
+  82908ec — "T10")
 
 ### Added
 
@@ -55,8 +66,9 @@ will be cut once the in-flight `.market_cache.json` write-path fix
 
 ### Security
 
-- The four changes above each close a discrete finding from the v2
-  documentation security review. See `docs/SECURITY_REVIEW.md` §0.1.1
+- The five changes in `### Changed` and `### Added` above each close a
+  discrete finding from the v2 documentation security review. See
+  `docs/SECURITY_REVIEW.md` §0.1.1
   ("Mitigation log — 2026-05-04 post-tag patches") for the per-finding
   status update.
 

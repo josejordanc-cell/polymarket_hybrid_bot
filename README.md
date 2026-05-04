@@ -82,6 +82,7 @@ polymarket_hybrid_bot/
 | `BOT_LOG_DIR` | Log directory (`/app/logs` in Docker) |
 | `BOT_REPORT_DIR` | Weekly report output (`/app/data/reports` in Docker) |
 | `BOT_DISABLE_BINANCE_FEED` | Skip the Binance reference feed (set `1` / `true` / `yes`). Use in regions where `api.binance.com` returns HTTP 451. Coinbase feed unaffected. |
+| `BOT_MARKET_CACHE_PATH` | Filesystem path inside the container for the markets discovery cache (default `/app/data/market_cache.json`). Backed by the `market_cache_data` Docker named volume so the cache survives rebuilds. Override only if running outside Docker or with a custom mount. (T10) |
 
 See `.env.example` for the full `BOT_*` surface (metrics, resolution poll, API keys).
 
