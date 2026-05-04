@@ -52,7 +52,7 @@ class RiskConfig(BaseSettings):
     daily_drawdown_limit_pct: float = Field(default=0.12, ge=0.03, le=0.30)
     kelly_fraction: float = Field(
         default=0.25,
-        ge=0.0,
+        ge=0.05,
         le=0.50,
         description=(
             "Kelly multiplier; quarter-Kelly default. Hard cap 0.50; "
