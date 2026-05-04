@@ -5,6 +5,19 @@ to production (sim mode) and verified end-to-end. A v0.2.5 release tag
 will be cut once the in-flight `.market_cache.json` write-path fix
 (T10) lands.
 
+### Removed
+
+- Dead PascalCase strategy modules (canonical snake_case versions
+  have been authoritative since v0.2.1):
+  `strategies/IntraArbitrage.py`, `strategies/MarketMaker.py`,
+  `strategies/MomentumLatency.py`, `strategies/SmartMoneyCopy.py`.
+- `data_feeds/spot_feed.py` — superseded by the per-venue feed
+  implementation.
+- Deprecated `deploy/` duplicates: `deploy/Dockerfile`,
+  `deploy/docker-compose.yml`,
+  `deploy/polymarket-hybrid-bot.service`. The canonical Dockerfile
+  and compose live at the repo root; the bot runs under Docker.
+
 ### Changed
 
 - `observability/metrics_exporter.py`: bound the Prometheus HTTP
