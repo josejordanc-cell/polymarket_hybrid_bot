@@ -7,6 +7,7 @@ Maintains a rolling return history per symbol for momentum/z-score strategies.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections import defaultdict, deque
 
 import numpy as np
@@ -54,6 +55,12 @@ class BinanceFeed:
 
     async def _run_venue(self, venue: str) -> None:
         """Subscribe to all configured symbols for a given venue."""
+        if venue == "binance" and os.getenv(
+            "BOT_DISABLE_BINANCE_FEED", ""
+        ).lower() in ("1", "true", "yes"):
+            logger.info("binance_feed_disabled", reason="BOT_DISABLE_BINANCE_FEED=true")
+            return
+
         cfg = self._config.api
         symbols = (
             cfg.binance_symbols if venue == "binance" else cfg.coinbase_symbols
