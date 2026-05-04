@@ -135,6 +135,29 @@ The repo was public from approximately 2026-05-03T05:06Z (when the IP was first 
 
 This audit is the basis for declining the v1 "rotate every secret" recommendation. It is not the basis for declining all of §1's editorial changes — the going-forward rule (no production identifiers in committed files) still applies.
 
+## 0.1.1 Mitigation log — 2026-05-04 post-tag patches
+
+After the v0.2.4 release tag, four additional fixes were merged on
+`main` and deployed to production (sim mode). Each closes a finding
+flagged in this review.
+
+| Finding | Patch | PR / commit | Status |
+| --- | --- | --- | --- |
+| Prometheus metrics exposed on all interfaces | `observability/metrics_exporter.py` now binds to `127.0.0.1` | PR #9, commit `0623eb4` | MITIGATED |
+| `kelly_fraction` upper bound permits full-Kelly bankroll allocation | `BotRiskConfig.kelly_fraction` capped at `le=0.50` (floor `ge=0.05` preserved) | PR #10, commit `9af6254` | MITIGATED |
+| `deploy/rebuild.sh` did not validate `.env` mode or presence | Fail-fast guards added: missing `.env` → exit 1 with remediation hint; non-600 mode → exit 1; dual `stat` fallback (Linux + BSD/macOS) | PR #11, commit `0eccb66` | MITIGATED |
+| `BOT_BINANCE_SYMBOLS=[]` does not actually disable the Binance feed (pydantic-settings v2 ignores empty-list env values) | New `BOT_DISABLE_BINANCE_FEED` env flag in `data_feeds/binance_feed.py`; emits `binance_feed_disabled` INFO log; in production, eliminated ~1500 `spot_feed_tick_error` events/hour from a US/DO IP | PR #12, commit `6a2e9ed` | MITIGATED |
+
+Verification on the production droplet (157.230.63.174, `sim` mode):
+all four changes confirmed working end-to-end via direct
+`/proc/net/tcp` inspection (T1), startup boot test (T2), three rebuild.sh
+guard paths (T6), and a paired regression/kill-switch test showing 25
+`spot_feed_tick_error` events/min before vs. 0 after (T11).
+
+A v0.2.5 release tag has not yet been cut. Tagging is deferred until
+the in-flight `.market_cache.json` write-path fix (T10) lands, so
+v0.2.5 can be a single coherent "post-tag hardening" release.
+
 ---
 
 ## 1. Action items
@@ -1279,6 +1302,15 @@ docker run --rm -v "$PWD:/repo" aquasec/trivy fs --severity HIGH,CRITICAL /repo
 | C7 | `.market_cache.json` permission warning silenced via `docker exec chown` | LOW | ✅ done (ephemeral — see O8 below) |
 | C8 | `.env` inline-comment cleanup on the production droplet (14 → 0) | MEDIUM | ✅ done on disk; takes effect on next container restart |
 | C9 | Audit of exposure window — no successful logins from outside maintainer ISP | (basis for §1.1 downgrade) | ✅ done |
+
+### 12.1.1 Completed post-v0.2.4 (T1, T2, T6, T11)
+
+| # | Item | Type | Effort | Owner | Status |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Bind Prometheus exporter to 127.0.0.1 | code | S | maintainer | DONE 2026-05-04 (PR #9) |
+| 2 | Cap `kelly_fraction` at 0.50 | code | S | maintainer | DONE 2026-05-04 (PR #10) |
+| 3 | rebuild.sh fail-fast on missing/world-readable `.env` | code | S | maintainer | DONE 2026-05-04 (PR #11) |
+| 4 | `BOT_DISABLE_BINANCE_FEED` env flag | code | S | maintainer | DONE 2026-05-04 (PR #12) |
 
 ### 12.2 Still open, ranked by severity × tractability
 

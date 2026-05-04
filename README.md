@@ -2,15 +2,15 @@
 
 Async Polymarket hybrid strategies (sim default): feeds → risk → priority strategy loop → CLOB execution.
 
-## v0.2.1 status
+## Status (post-v0.2.4)
 
 | Area | Status |
 | --- | --- |
 | Docker build | Fixed — `web3` 7.x + explicit `hexbytes` pin resolves `eth-account===0.13.0` conflict with `py-clob-client==0.22.0` |
 | Strategy loop | OK — look for `strategy_loop_started` in logs after boot |
 | REST (Polymarket / Gamma) | Primary data path |
-| WebSocket (Polymarket CLOB) | **Degraded** — upgrade handshake may return **404**; bot falls back to REST polling |
-| Binance spot feed | **Blocked** in many regions — HTTP **451** from US / most DO POPs; set `DISABLE_BINANCE_FEED=1` and use EU/SG regions if you need ccxt live |
+| WebSocket (Polymarket CLOB) | **Degraded** — CLOB WebSocket upgrade may return **404**; the bot uses REST polling as the stable operational fallback |
+| Binance spot feed | **Disabled by default in restricted regions via** `BOT_DISABLE_BINANCE_FEED=true` (added in T11). Without the flag, US/most DO POPs still receive HTTP 451 from `api.binance.com`. Coinbase remains the live reference feed in those regions. |
 | Weekly report (`scripts/weekly_report.py`) | Reads `data/trades.jsonl` JSONL; empty / missing file handled gracefully |
 
 ## Quick start
@@ -60,7 +60,7 @@ polymarket_hybrid_bot/
 ├── data/                   # Mounted volume — trades.jsonl, reports
 ├── logs/                   # Mounted volume
 ├── Dockerfile              # Multi-stage builder → slim runtime
-├── docker-compose.yml      # Service `bot`, image polymarket_hybrid_bot:0.2.1
+├── docker-compose.yml      # Service `bot`, image polymarket_hybrid_bot:0.2.4
 ├── requirements.txt        # Pinned deps (v0.2.1)
 ├── HANDOFF.md              # Maintainer handoff
 └── DEPLOY_DO.md            # DigitalOcean droplet guide
@@ -81,15 +81,14 @@ polymarket_hybrid_bot/
 | `BOT_DATA_DIR` | Data directory (default `/app/data` in Docker) |
 | `BOT_LOG_DIR` | Log directory (`/app/logs` in Docker) |
 | `BOT_REPORT_DIR` | Weekly report output (`/app/data/reports` in Docker) |
-| `DISABLE_BINANCE_FEED` | Documented workaround for Binance **451** / geo |
-| `SUPPRESS_WS_404_WARNINGS` | Documented toggle for WS **404** noise (REST fallback) |
+| `BOT_DISABLE_BINANCE_FEED` | Skip the Binance reference feed (set `1` / `true` / `yes`). Use in regions where `api.binance.com` returns HTTP 451. Coinbase feed unaffected. |
 
 See `.env.example` for the full `BOT_*` surface (metrics, resolution poll, API keys).
 
 ## Known issues
 
 1. **Polymarket WebSocket 404** — The WS upgrade URL may return 404; the bot continues on REST. Not introduced in v0.2.1.
-2. **Binance 451** — Geo / compliance block from several datacenters. Use `fra1` / `sgp1` / `lon1`, or disable Binance feed per env docs. Not introduced in v0.2.1.
+2. **Binance 451** — `api.binance.com` returns HTTP 451 from US and most DigitalOcean POPs. Set `BOT_DISABLE_BINANCE_FEED=true` in `.env` to silence the noise (T11), or run from `fra1` / `sgp1` / `lon1` if you need the live Binance reference feed.
 
 ## Operations cheatsheet
 
