@@ -1,3 +1,100 @@
+## v0.2.4 — 2026-05-04
+
+Security hardening release. No application code changes; all changes are
+to the container image, deployment config, environment template, and
+documentation.
+
+### Added
+
+- `SECURITY.md`: vulnerability disclosure policy, supported-version table,
+  in-scope/out-of-scope criteria. (PR #5)
+- `docs/SECURITY_REVIEW.md`: full v2 documentation security review (1331
+  lines, OWASP Top 10 + CIS Docker Benchmark coverage, 14 ranked findings,
+  mitigation log of the 2026-05-04 hardening session, deferred-files
+  catalogue for the next pass). (PR #8)
+
+### Changed
+
+- `Dockerfile`: pinned `python:3.11-slim-bookworm` by digest
+  (`sha256:ee710afcfb733f4a750d9be683cf054b5cd247b6c5f5237a6849ea568b90ab15`,
+  queried 2026-05-04) for both builder and runtime stages. Added `tini`
+  as PID 1 for clean SIGTERM handling, OCI image labels, and
+  `COPY --chown=bot:bot . /app` so cache writes do not require runtime
+  chown. (PR #5)
+- `docker-compose.yml`: added `cap_drop: ALL`,
+  `security_opt: no-new-privileges:true`, `mem_limit`, `mem_reservation`,
+  `pids_limit`, dedicated `bot_net` bridge network, json-file log
+  rotation, and an explicit non-root `user: "1000:1000"` pin as
+  defense-in-depth. (PR #5) Then dropped `cpus` from 1.5 to 1.0 so the
+  compose file is compatible with the production 1-vCPU droplet without
+  a manual in-place patch. (PR #6)
+- `.env.example`: relabelled secrets with `[SECRET]` markers, added
+  `BOT_METRICS_BIND_HOST` and `BOT_METRICS_AUTH_TOKEN`, removed
+  `BOT_RISK_BANKROLL_USD`'s default value (must be set explicitly per
+  deploy), and rewrote inline `KEY=VALUE  # comment` patterns to put the
+  comment on a separate line — this idiom was the root cause of the
+  v0.2.2 `equity_reconciliation_disabled: Non-hexadecimal digit found`
+  incident, since `python-dotenv` reads the comment as part of the
+  value. (PR #5)
+- `.gitignore`: added entries for `data/`, `logs/`, `reports/`,
+  `wallet*.json`, `mnemonic*`, `private_key*`, `*.kdbx`,
+  `.market_cache.json`, `.env.bak.*` and other secret/runtime-state
+  globs. (PR #5)
+
+### Removed
+
+- `.env.example`: removed the entire `# --- Feature flags ---` section.
+  `DISABLE_BINANCE_FEED` and `SUPPRESS_WS_404_WARNINGS` were documented
+  in the template but never wired to the runtime — neither variable is
+  read by any `*.py` file under `/app`. The misleading
+  `Set DISABLE_BINANCE_FEED=1 to skip Binance entirely` comment near
+  `BOT_BINANCE_SYMBOLS` was rewritten to explain the actual situation:
+  pydantic-settings v2 silently ignores empty-list env values, so even
+  the documented `BOT_BINANCE_SYMBOLS=[]` fallback does not currently
+  disable the Binance feed. A real disable mechanism is queued for
+  v0.3.0 (likely a top-level `os.getenv` flag in
+  `data_feeds/binance_feed.py`). (PR #7)
+
+### Security
+
+- Image is now reproducible-by-digest end-to-end. Supply-chain
+  resistance against `latest`-style tag mutation. Tracked rebuild
+  cadence: on each upstream security advisory, or every 90 days.
+- Container drops all Linux capabilities and disables privilege
+  escalation. The bot needs none.
+- Resource ceilings prevent a runaway loop or memory leak from taking
+  the host down.
+- Deploy key for the production droplet is registered as **read-only**
+  on GitHub; the droplet cannot push.
+- Production droplet (157.230.63.174) is hardened against the v1
+  `CRITICAL` exposure: SSH key-only, fail2ban active, kernel current,
+  unattended-upgrades enabled, repository flipped to private. Audit of
+  the exposure window shows no successful login from outside the
+  maintainer's residential ISP.
+
+### Known issues (unchanged from v0.2.3)
+
+- Polymarket WS 404 — REST polling fallback is active. Tracked for
+  v0.3.0.
+- Binance HTTP 451 from US/DO IPs — see the new comment in
+  `.env.example` near `BOT_BINANCE_SYMBOLS`. Cosmetic noise at WARNING
+  level only; bot strategy continues to function.
+- Equity reconciliation requires `BOT_POLYGON_RPC_URL` to be set to a
+  paid RPC provider (QuickNode/Alchemy/Infura). Live mode without
+  reconciliation is **not safe**; see `docs/SECURITY_REVIEW.md` finding
+  #5.
+- Bot still deploys as root on the host. Documented as a known issue;
+  hard live-mode gate is in `docs/HANDOFF.md`.
+
+### Pull requests merged
+
+- PR #5: security: v2 editorial revisions per SECURITY_REVIEW.md
+- PR #6: fix(compose): cpus 1.5 -> 1.0 for 1-vCPU droplet
+- PR #7: docs(env): remove fictional DISABLE_BINANCE_FEED and
+  SUPPRESS_WS_404_WARNINGS
+- PR #8 _(this release)_: docs: commit SECURITY_REVIEW.md v2 and
+  CHANGELOG for v0.2.4
+
 # Changelog
 
 All notable changes to this project are documented in this file.
