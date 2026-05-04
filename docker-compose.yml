@@ -3,20 +3,61 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: polymarket_hybrid_bot:0.2.1
+    image: polymarket_hybrid_bot:0.2.4
     container_name: polymarket-hybrid-bot
     restart: unless-stopped
+
+    # User is set in the Dockerfile but pin it here as defense-in-depth in
+    # case someone swaps in a different image tag.
+    user: "1000:1000"
+
     env_file:
       - .env
+
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./scripts:/app/scripts:ro
+
+    # NOTE: `read_only: true` and a tmpfs mount for /tmp are intentionally
+    # OMITTED in this revision. The bot currently writes its market cache
+    # to `/app/.market_cache.json` (image-root path), which would fail under
+    # a read-only root filesystem. Once the v0.3.0 code change moves the
+    # cache to `/app/data/market_cache.json` (a bind-mounted writable
+    # directory), add the following block back here:
+    #
+    #   read_only: true
+    #   tmpfs:
+    #     - /tmp:rw,nosuid,nodev,size=64m
+    #
+    # See SECURITY_REVIEW_polymarket_hybrid_bot.md §7 and §12.2 item 8.
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+    # Add capabilities back here ONLY if a specific dependency requires
+    # them. None are currently needed.
+
+    # Resource ceilings — prevents a runaway loop or memory leak from
+    # taking the host down. Tune for the actual droplet size.
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 1.5
+    pids_limit: 256
+
+    # Dedicated bridge network — no implicit access to other compose
+    # projects on the same host.
+    networks:
+      - bot_net
+
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "5"
+
     healthcheck:
       test:
         [
@@ -27,3 +68,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
+
+networks:
+  bot_net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-pmbot

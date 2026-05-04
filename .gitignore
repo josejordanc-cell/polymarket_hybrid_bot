@@ -9,6 +9,7 @@ __pycache__/
 htmlcov/
 .tox/
 .mypy_cache/
+.ruff_cache/
 
 # Virtual environments
 venv/
@@ -25,18 +26,38 @@ Thumbs.db
 *.swp
 *.swo
 
-# Secrets and runtime state
+# Secrets, keys, and runtime state
 .env
 .env.local
 .env.*.local
+.env.bak.*
 *.key
 *.pem
+*.p12
+*.pfx
+secrets/
+keys/
+wallet*.json
+mnemonic*
+private_key*
+*.kdbx
 
 # Bot runtime artifacts
 .market_cache.json
+data/
+!data/.gitkeep
+logs/
+!logs/.gitkeep
+reports/
+!reports/.gitkeep
 bot.log
 *.log
 
+# Backups and temp
+*.bak
+*~
+*.orig
+*.rej
+
 # Docker
 .docker/
-.env.bak.*
