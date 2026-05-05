@@ -494,6 +494,7 @@ async def run_bot(mode: str) -> None:
                 approved = risk.approve_orders(intents)
 
                 async def _exec_and_record(intent: OrderIntent) -> TradeResult:
+                    nonlocal _hb_orders_submitted
                     result = await executor.execute(intent)
                     if getattr(result, "accepted", False):
                         _hb_orders_submitted += 1
