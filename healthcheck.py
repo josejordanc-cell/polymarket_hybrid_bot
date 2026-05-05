@@ -5,7 +5,7 @@ Lightweight health monitor for the Polymarket hybrid bot.
 Checks:
   1. Log file freshness — bot is writing logs (not silently hung)
   2. Polymarket REST API reachability
-  3. Binance WebSocket connectivity (via REST ping)
+  3. Spot feed subsystem liveness (T13 heartbeat events in logs)
   4. Memory usage vs available RAM
   5. Daily PnL / kill-switch status from log scan
 
@@ -41,8 +41,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 POLYMARKET_HOST = os.environ.get("BOT_POLYMARKET_HOST", "https://clob.polymarket.com")
-BINANCE_PING_URL = "https://api.binance.com/api/v3/ping"
 LOG_FRESHNESS_SEC = 120        # warn if no log activity in 2 minutes
+SPOT_FEED_HEARTBEAT_FRESHNESS_SEC = 120  # heartbeats fire every 60s; 2x slack
 MAX_MEMORY_PCT = 85            # warn if container using > 85% of available RAM
 DOCKER_CONTAINER = "polymarket-hybrid-bot"
 
@@ -187,26 +187,78 @@ async def check_polymarket_api() -> CheckResult:
         )
 
 
-async def check_binance_api() -> CheckResult:
-    """Verify Binance REST API is reachable (proxy for WS connectivity)."""
+async def check_spot_feed() -> CheckResult:
+    """Check the spot feed subsystem is alive via T13 heartbeat events.
+
+    Looks for at least one spot_feed_heartbeat event from any venue in
+    the last SPOT_FEED_HEARTBEAT_FRESHNESS_SEC seconds. Disabled venues
+    (e.g. binance via BOT_DISABLE_BINANCE_FEED — T11) intentionally do
+    not emit heartbeats; this is healthy as long as at least one venue
+    is firing.
+    """
     try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(BINANCE_PING_URL, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                ok = resp.status == 200
-                return CheckResult(
-                    name="binance_api",
-                    ok=ok,
-                    message=f"status={resp.status}",
-                    critical=False,
-                )
-    except Exception as exc:
-        return CheckResult(
-            name="binance_api",
-            ok=False,
-            message=f"unreachable: {exc}",
-            critical=False,
+        result = subprocess.run(
+            ["docker", "logs", "--since", "3m", DOCKER_CONTAINER],
+            capture_output=True, text=True, timeout=10
         )
+        output = (result.stdout + result.stderr).strip()
+        if not output:
+            return CheckResult(
+                name="spot_feed",
+                ok=False,
+                message="no log output in last 3m",
+                critical=False,
+            )
+
+        now = datetime.now(timezone.utc)
+        latest_age_sec: float | None = None
+        latest_venue: str | None = None
+
+        # Walk lines from newest to oldest, find first spot_feed_heartbeat.
+        for line in reversed(output.splitlines()):
+            stripped = line.strip()
+            if not stripped.startswith("{"):
+                continue
+            try:
+                data = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if data.get("event") != "spot_feed_heartbeat":
+                continue
+            ts_str = data.get("timestamp", "")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            latest_age_sec = (now - ts).total_seconds()
+            latest_venue = data.get("venue", "unknown")
+            break
+
+        if latest_age_sec is None:
+            return CheckResult(
+                name="spot_feed",
+                ok=False,
+                message="no spot_feed_heartbeat in last 3m",
+                critical=False,
+            )
+
+        ok = latest_age_sec < SPOT_FEED_HEARTBEAT_FRESHNESS_SEC
+        return CheckResult(
+            name="spot_feed",
+            ok=ok,
+            message=(
+                f"last_heartbeat={round(latest_age_sec)}s ago "
+                f"venue={latest_venue} "
+                f"(limit={SPOT_FEED_HEARTBEAT_FRESHNESS_SEC}s)"
+            ),
+            critical=not ok,
+        )
+    except FileNotFoundError:
+        return CheckResult(name="spot_feed", ok=True, message="docker_not_available_skipped")
+    except Exception as exc:
+        return CheckResult(name="spot_feed", ok=False, message=str(exc))
 
 
 async def check_memory() -> CheckResult:
@@ -277,7 +329,7 @@ async def run_healthcheck() -> HealthReport:
         check_docker_container(),
         check_log_freshness(),
         check_polymarket_api(),
-        check_binance_api(),
+        check_spot_feed(),
         check_memory(),
         check_kill_switch(),
         return_exceptions=False,
