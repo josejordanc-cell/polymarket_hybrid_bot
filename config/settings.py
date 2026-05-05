@@ -94,6 +94,19 @@ class StrategyConfig(BaseSettings):
     # Momentum window size (number of ticks)
     momentum_window: int = Field(default=60, ge=20, le=500)
 
+    @model_validator(mode="after")
+    def _smart_money_indexer_check(self) -> "StrategyConfig":
+        if self.smart_money_enabled:
+            # data_feeds/polygon_feed.py:_scan_recent_wallets is a stub.
+            # Until that's wired to a real indexer, refuse to enable.
+            raise ValueError(
+                "BOT_STRAT_SMART_MONEY_ENABLED=true but the wallet "
+                "indexer (data_feeds/polygon_feed.py:_scan_recent_wallets)"
+                " is a stub. Implement that function before enabling "
+                "this strategy."
+            )
+        return self
+
 
 class RuntimeConfig(BaseSettings):
     model_config = SettingsConfigDict(
