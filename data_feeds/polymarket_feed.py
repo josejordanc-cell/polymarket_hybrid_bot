@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -116,6 +117,8 @@ class PolymarketFeed:
         self._config = config
         self._market_ids: list[str] = list(market_ids)
         self._snapshots: dict[str, MarketSnapshot] = {}
+        self._messages_seen: int = 0
+        self._last_message_at: float | None = None
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -127,38 +130,49 @@ class PolymarketFeed:
             logger.warning("polymarket_feed_no_markets_configured")
             return
 
-        backoff = 1.0
-        while True:
+        liveness_task = asyncio.create_task(
+            self._liveness_heartbeat_loop(),
+            name="polymarket_liveness_heartbeat",
+        )
+        try:
+            backoff = 1.0
+            while True:
+                try:
+                    async with websockets.connect(
+                        self._config.api.polymarket_ws_url,
+                        ping_interval=None,   # disable library pings — we send app-level pings
+                        close_timeout=5,
+                    ) as ws:
+                        await self._subscribe(ws)
+                        backoff = 1.0  # reset on successful connect
+                        # Run message receiver and heartbeat concurrently
+                        await asyncio.gather(
+                            self._receive_loop(ws),
+                            self._heartbeat_loop(ws),
+                        )
+                except ConnectionClosed as exc:
+                    logger.warning("polymarket_ws_closed", reason=str(exc), retry_in=backoff)
+                    from observability.metrics_exporter import get_metrics_exporter
+
+                    mx = get_metrics_exporter()
+                    if mx:
+                        mx.record_feed_disconnect("polymarket_ws_closed")
+                except Exception as exc:
+                    logger.exception("polymarket_feed_error", error=str(exc), retry_in=backoff)
+                    from observability.metrics_exporter import get_metrics_exporter
+
+                    mx = get_metrics_exporter()
+                    if mx:
+                        mx.record_feed_disconnect("polymarket_feed_error")
+
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, _MAX_BACKOFF)
+        finally:
+            liveness_task.cancel()
             try:
-                async with websockets.connect(
-                    self._config.api.polymarket_ws_url,
-                    ping_interval=None,   # disable library pings — we send app-level pings
-                    close_timeout=5,
-                ) as ws:
-                    await self._subscribe(ws)
-                    backoff = 1.0  # reset on successful connect
-                    # Run message receiver and heartbeat concurrently
-                    await asyncio.gather(
-                        self._receive_loop(ws),
-                        self._heartbeat_loop(ws),
-                    )
-            except ConnectionClosed as exc:
-                logger.warning("polymarket_ws_closed", reason=str(exc), retry_in=backoff)
-                from observability.metrics_exporter import get_metrics_exporter
-
-                mx = get_metrics_exporter()
-                if mx:
-                    mx.record_feed_disconnect("polymarket_ws_closed")
-            except Exception as exc:
-                logger.exception("polymarket_feed_error", error=str(exc), retry_in=backoff)
-                from observability.metrics_exporter import get_metrics_exporter
-
-                mx = get_metrics_exporter()
-                if mx:
-                    mx.record_feed_disconnect("polymarket_feed_error")
-
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, _MAX_BACKOFF)
+                await liveness_task
+            except asyncio.CancelledError:
+                pass
 
     async def _receive_loop(self, ws: Any) -> None:
         """Receive and process messages until connection closes."""
@@ -175,6 +189,39 @@ class PolymarketFeed:
             except Exception:
                 break  # connection closed, let receive_loop handle reconnect
 
+    async def _liveness_heartbeat_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(60)
+                markets_subscribed = len(self._market_ids)
+                messages_seen = self._messages_seen
+                if self._last_message_at is None:
+                    seconds_since = None
+                else:
+                    seconds_since = round(
+                        time.monotonic() - self._last_message_at,
+                        1,
+                    )
+                payload = dict(
+                    markets_subscribed=markets_subscribed,
+                    messages_seen=messages_seen,
+                    seconds_since_last_message=seconds_since,
+                )
+                if (
+                    seconds_since is not None
+                    and seconds_since > 30
+                ):
+                    logger.warning("polymarket_feed_heartbeat", **payload)
+                else:
+                    logger.info("polymarket_feed_heartbeat", **payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "polymarket_feed_heartbeat_error",
+                    error=str(exc),
+                )
+
     async def _subscribe(self, ws: Any) -> None:
         # Exact subscription format required by Polymarket WS server
         sub = {
@@ -189,6 +236,8 @@ class PolymarketFeed:
     # ------------------------------------------------------------------
 
     async def _on_message(self, raw: str | bytes) -> None:
+        self._messages_seen += 1
+        self._last_message_at = time.monotonic()
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:

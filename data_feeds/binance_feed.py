@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections import defaultdict, deque
 
 import numpy as np
@@ -40,6 +41,8 @@ class BinanceFeed:
             lambda: defaultdict(lambda: deque(maxlen=_HISTORY_LEN))
         )
         self._last_ticks: dict[str, dict[str, SpotTick]] = defaultdict(dict)
+        self._ticks_seen: dict[str, int] = {}
+        self._last_tick_at: dict[str, float] = {}
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -50,6 +53,7 @@ class BinanceFeed:
         tasks = [
             asyncio.create_task(self._run_venue("binance"), name="binance_spot"),
             asyncio.create_task(self._run_venue("coinbase"), name="coinbase_spot"),
+            asyncio.create_task(self._heartbeat_loop(), name="spot_feed_heartbeat"),
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -67,6 +71,9 @@ class BinanceFeed:
         )
         if not symbols:
             return
+
+        self._ticks_seen[venue] = 0
+        self._last_tick_at[venue] = time.monotonic()
 
         backoff = 1.0
         while True:
@@ -128,6 +135,39 @@ class BinanceFeed:
                 symbol=symbol,
                 price=price,
             )
+            self._ticks_seen[venue] = self._ticks_seen.get(venue, 0) + 1
+            self._last_tick_at[venue] = time.monotonic()
+
+    async def _heartbeat_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(60)
+                now = time.monotonic()
+                for venue in list(self._ticks_seen.keys()):
+                    seconds_since = round(
+                        now - self._last_tick_at.get(venue, now), 1
+                    )
+                    last_price = {
+                        sym: tick.price
+                        for sym, tick in self._last_ticks.get(venue, {}).items()
+                    }
+                    payload = dict(
+                        venue=venue,
+                        ticks_seen=self._ticks_seen[venue],
+                        last_price=last_price,
+                        seconds_since_last_tick=seconds_since,
+                    )
+                    if seconds_since > 30:
+                        logger.warning("spot_feed_heartbeat", **payload)
+                    else:
+                        logger.info("spot_feed_heartbeat", **payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "spot_feed_heartbeat_error",
+                    error=str(exc),
+                )
 
     # ------------------------------------------------------------------
     # Data access helpers
