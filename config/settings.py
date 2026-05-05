@@ -5,6 +5,7 @@ All values are env-driven (prefix BOT_) with safe simulation defaults.
 """
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -39,6 +40,113 @@ class ApiConfig(BaseSettings):
     # Polygon / smart-money
     polygon_rpc_url: SecretStr = Field(default=SecretStr(""))
     chain_id: int = Field(default=137)
+
+    @field_validator("polymarket_host")
+    @classmethod
+    def _validate_polymarket_host(cls, v: str) -> str:
+        if not v:
+            raise ValueError("polymarket_host must not be empty")
+        if not v.startswith("https://"):
+            raise ValueError(
+                f"polymarket_host must start with 'https://', got: {v!r}"
+            )
+        return v
+
+    @field_validator("polymarket_ws_url")
+    @classmethod
+    def _validate_polymarket_ws_url(cls, v: str) -> str:
+        if not v:
+            raise ValueError("polymarket_ws_url must not be empty")
+        if not v.startswith("wss://"):
+            raise ValueError(
+                f"polymarket_ws_url must start with 'wss://' "
+                f"(WebSocket Secure), got: {v!r}"
+            )
+        return v
+
+    @field_validator("polygon_rpc_url")
+    @classmethod
+    def _validate_polygon_rpc_url(cls, v: SecretStr) -> SecretStr:
+        raw = v.get_secret_value() if isinstance(v, SecretStr) else v
+        if not raw:
+            return v
+        if not (raw.startswith("https://") or raw.startswith("http://")):
+            raise ValueError(
+                "polygon_rpc_url must start with 'http://' or 'https://' "
+                "when set (use https:// for production RPC providers)"
+            )
+        return v
+
+    @field_validator("polymarket_private_key")
+    @classmethod
+    def _validate_polymarket_private_key(cls, v: SecretStr) -> SecretStr:
+        raw = v.get_secret_value() if isinstance(v, SecretStr) else v
+        if not raw:
+            return v
+        hex_part = raw[2:] if raw.startswith("0x") else raw
+        if len(hex_part) != 64:
+            raise ValueError(
+                f"polymarket_private_key must be 64 hex chars "
+                f"(or 66 with '0x' prefix); got {len(raw)} chars"
+            )
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", hex_part):
+            raise ValueError(
+                "polymarket_private_key must be hexadecimal "
+                "(0-9, a-f, A-F)"
+            )
+        return v
+
+    @field_validator("polymarket_api_key")
+    @classmethod
+    def _validate_polymarket_api_key(cls, v: SecretStr) -> SecretStr:
+        raw = v.get_secret_value() if isinstance(v, SecretStr) else v
+        if not raw:
+            return v
+        if len(raw) < 16:
+            raise ValueError(
+                f"polymarket_api_key looks too short to be valid "
+                f"(got {len(raw)} chars, expected at least 16)"
+            )
+        return v
+
+    @field_validator("polymarket_api_secret")
+    @classmethod
+    def _validate_polymarket_api_secret(cls, v: SecretStr) -> SecretStr:
+        raw = v.get_secret_value() if isinstance(v, SecretStr) else v
+        if not raw:
+            return v
+        if len(raw) < 16:
+            raise ValueError(
+                f"polymarket_api_secret looks too short to be valid "
+                f"(got {len(raw)} chars, expected at least 16)"
+            )
+        return v
+
+    @field_validator("polymarket_api_passphrase")
+    @classmethod
+    def _validate_polymarket_api_passphrase(cls, v: SecretStr) -> SecretStr:
+        raw = v.get_secret_value() if isinstance(v, SecretStr) else v
+        if not raw:
+            return v
+        if len(raw) < 1:
+            raise ValueError("polymarket_api_passphrase must not be whitespace-only")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_spot_symbols(self) -> "ApiConfig":
+        symbol_re = re.compile(r"^[A-Z]+/[A-Z]+$")
+        for venue, symbols in (
+            ("binance_symbols", self.binance_symbols),
+            ("coinbase_symbols", self.coinbase_symbols),
+        ):
+            for sym in symbols:
+                if not symbol_re.fullmatch(sym):
+                    raise ValueError(
+                        f"{venue} entry {sym!r} is malformed; "
+                        f"expected format 'BASE/QUOTE' with uppercase letters "
+                        f"(e.g. 'BTC/USDT', 'ETH/USD')"
+                    )
+        return self
 
 
 class RiskConfig(BaseSettings):
@@ -224,6 +332,40 @@ class BotConfig(BaseSettings):
                     f"Live mode requires these env vars to be set: {missing}"
                 )
         return self
+
+    @field_validator("polygon_wallet_address")
+    @classmethod
+    def _validate_polygon_wallet_address(cls, v: str) -> str:
+        if not v:
+            return v
+        if not v.startswith("0x"):
+            raise ValueError(
+                f"polygon_wallet_address must start with '0x'; got: {v!r}"
+            )
+        hex_part = v[2:]
+        if len(hex_part) != 40:
+            raise ValueError(
+                f"polygon_wallet_address must be 40 hex chars after '0x' "
+                f"(got {len(hex_part)} chars)"
+            )
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", hex_part):
+            raise ValueError(
+                "polygon_wallet_address contains non-hex characters "
+                "(must be 0-9, a-f, A-F after '0x')"
+            )
+        return v
+
+    @field_validator("experiment_id")
+    @classmethod
+    def _validate_experiment_id(cls, v: str) -> str:
+        if not v:
+            raise ValueError("experiment_id must not be empty")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", v):
+            raise ValueError(
+                f"experiment_id must contain only letters, digits, "
+                f"underscores, and hyphens (got: {v!r})"
+            )
+        return v
 
 
 @lru_cache(maxsize=1)
