@@ -24,6 +24,10 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 
 ### Changed
 
+- T14: `healthcheck.py` — replace Binance API ping (always 451 from
+  droplet) with spot-feed liveness check based on T13 heartbeat events.
+  Renames check from `binance_api` to `spot_feed`. Disabled venues (T11)
+  no longer cause false-negative degraded states.
 - `observability/metrics_exporter.py`: bound the Prometheus HTTP
   exporter to `127.0.0.1` so the metrics endpoint is no longer
   reachable from the public network interface, closing the
