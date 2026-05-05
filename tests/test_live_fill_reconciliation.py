@@ -40,8 +40,8 @@ def _sample_intent() -> OrderIntent:
 def live_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_MODE", "live")
     monkeypatch.setenv("BOT_POLYMARKET_PRIVATE_KEY", "0x" + "ab" * 32)
-    monkeypatch.setenv("BOT_POLYMARKET_API_KEY", "test_api_key")
-    monkeypatch.setenv("BOT_POLYMARKET_API_SECRET", "test_secret")
+    monkeypatch.setenv("BOT_POLYMARKET_API_KEY", "test_api_key_padded_to_32_chars_x")
+    monkeypatch.setenv("BOT_POLYMARKET_API_SECRET", "test_secret_padded_to_32_chars_xy")
     monkeypatch.setenv("BOT_POLYMARKET_API_PASSPHRASE", "test_pass")
     get_config.cache_clear()
     yield
