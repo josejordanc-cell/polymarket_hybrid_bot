@@ -175,7 +175,7 @@ async def equity_reconciliation_loop(
     consecutive_failures = 0
     last_error = ""
 
-    rpc = (config.api.polygon_rpc_url or "").strip()
+    rpc = (config.api.polygon_rpc_url.get_secret_value() or "").strip()
     if not rpc:
         logger.warning(
             "equity_reconciliation_disabled",

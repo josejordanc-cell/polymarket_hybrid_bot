@@ -8,7 +8,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,17 +26,17 @@ class ApiConfig(BaseSettings):
         default="wss://ws-subscriptions-clob.polymarket.com/ws/market"
     )
     # Credentials — must be non-empty in live mode (validated by BotConfig)
-    polymarket_private_key: str = Field(default="")
-    polymarket_api_key: str = Field(default="")
-    polymarket_api_secret: str = Field(default="")
-    polymarket_api_passphrase: str = Field(default="")
+    polymarket_private_key: SecretStr = Field(default=SecretStr(""))
+    polymarket_api_key: SecretStr = Field(default=SecretStr(""))
+    polymarket_api_secret: SecretStr = Field(default=SecretStr(""))
+    polymarket_api_passphrase: SecretStr = Field(default=SecretStr(""))
 
     # Spot feed symbols
     binance_symbols: list[str] = Field(default=["BTC/USDT", "ETH/USDT", "SOL/USDT"])
     coinbase_symbols: list[str] = Field(default=["BTC/USD", "ETH/USD", "SOL/USD"])
 
     # Polygon / smart-money
-    polygon_rpc_url: str = Field(default="")
+    polygon_rpc_url: SecretStr = Field(default=SecretStr(""))
     chain_id: int = Field(default=137)
 
 
@@ -182,10 +182,10 @@ class BotConfig(BaseSettings):
             missing = [
                 name
                 for name, val in {
-                    "polymarket_private_key": self.api.polymarket_private_key,
-                    "polymarket_api_key": self.api.polymarket_api_key,
-                    "polymarket_api_secret": self.api.polymarket_api_secret,
-                    "polymarket_api_passphrase": self.api.polymarket_api_passphrase,
+                    "polymarket_private_key": self.api.polymarket_private_key.get_secret_value(),
+                    "polymarket_api_key": self.api.polymarket_api_key.get_secret_value(),
+                    "polymarket_api_secret": self.api.polymarket_api_secret.get_secret_value(),
+                    "polymarket_api_passphrase": self.api.polymarket_api_passphrase.get_secret_value(),
                 }.items()
                 if not val
             ]

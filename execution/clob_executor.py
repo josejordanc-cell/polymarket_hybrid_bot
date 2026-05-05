@@ -125,12 +125,12 @@ class CLOBExecutor:
             api = config.api
             self._client = ClobClient(
                 host=api.polymarket_host,
-                key=api.polymarket_private_key,
+                key=api.polymarket_private_key.get_secret_value(),
                 chain_id=api.chain_id,
                 creds=ApiCreds(
-                    api_key=api.polymarket_api_key,
-                    api_secret=api.polymarket_api_secret,
-                    api_passphrase=api.polymarket_api_passphrase,
+                    api_key=api.polymarket_api_key.get_secret_value(),
+                    api_secret=api.polymarket_api_secret.get_secret_value(),
+                    api_passphrase=api.polymarket_api_passphrase.get_secret_value(),
                 ),
             )
             logger.info("clob_executor_live", host=api.polymarket_host)

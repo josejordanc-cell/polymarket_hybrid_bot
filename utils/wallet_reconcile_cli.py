@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     get_config.cache_clear()
     config = get_config()
 
-    rpc = (config.api.polygon_rpc_url or "").strip()
+    rpc = (config.api.polygon_rpc_url.get_secret_value() or "").strip()
     if not rpc:
         print("BOT_POLYGON_RPC_URL is required for on-chain balance", file=sys.stderr)
         return 2

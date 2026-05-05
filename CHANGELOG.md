@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Security
+- **T3:** Convert four Polymarket credential fields (`polymarket_private_key`, `polymarket_api_key`, `polymarket_api_secret`, `polymarket_api_passphrase`) and `polygon_rpc_url` from `str` to `pydantic.SecretStr`. Defense-in-depth: SecretStr auto-redacts in `repr()`, `model_dump()`, and `__str__`, so a future logging mistake won't print live credentials. Eight callsites updated to call `.get_secret_value()` when extracting cleartext (settings.py validator body, clob_executor ClobClient construction, polygon_feed RPC init, main.py reconciliation loop, wallet_reconcile_cli, equity_reconciliation).
+
 ## [0.2.3] — 2026-05-03
 
 ### Added

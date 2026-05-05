@@ -54,7 +54,7 @@ class PolygonSmartMoneyFeed:
 
     async def _initialize(self) -> bool:
         """Connect to Polygon RPC. Returns True on success."""
-        rpc = self._config.api.polygon_rpc_url
+        rpc = self._config.api.polygon_rpc_url.get_secret_value()
         if not rpc:
             logger.warning("polygon_rpc_url_not_set")
             return False
