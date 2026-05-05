@@ -137,7 +137,7 @@ This audit is the basis for declining the v1 "rotate every secret" recommendatio
 
 ## 0.1.1 Mitigation log — 2026-05-04 post-tag patches
 
-After the v0.2.4 release tag, five additional fixes were merged on
+After the v0.2.4 release tag, nine additional fixes were merged on
 `main` and deployed to production (sim mode). Each closes a finding
 flagged in this review.
 
@@ -148,19 +148,26 @@ flagged in this review.
 | `deploy/rebuild.sh` did not validate `.env` mode or presence | Fail-fast guards added: missing `.env` → exit 1 with remediation hint; non-600 mode → exit 1; dual `stat` fallback (Linux + BSD/macOS) | PR #11, commit `0eccb66` | MITIGATED |
 | `BOT_BINANCE_SYMBOLS=[]` does not actually disable the Binance feed (pydantic-settings v2 ignores empty-list env values) | New `BOT_DISABLE_BINANCE_FEED` env flag in `data_feeds/binance_feed.py`; emits `binance_feed_disabled` INFO log; in production, eliminated ~1500 `spot_feed_tick_error` events/hour from a US/DO IP | PR #12, commit `6a2e9ed` | MITIGATED |
 | `.market_cache.json` write path is `/app/` (image root, read-only for `bot`); ephemeral chown applied 2026-05-04 was not durable across container recreation | New `BOT_MARKET_CACHE_PATH` (default `/app/data/market_cache.json`); auto-mkdir; Dockerfile creates `/app/data/` owned by `bot`; docker-compose mounts `market_cache_data` named volume so cache survives rebuilds | PR #14, commit `82908ec` | MITIGATED |
+| Telegram alerts sent `parse_mode: "HTML"` on payloads mixing log lines and market symbols | Dropped `parse_mode` from the webhook JSON in `utils/alerts.py`; messages render as plain text; body shape otherwise unchanged | PR #17, commit `db21e18` | MITIGATED |
+| `BOT_STRAT_SMART_MONEY_ENABLED=true` while wallet indexer `_scan_recent_wallets` is still a stub | `model_validator` on `StrategyConfig` refuses startup with pydantic `ValidationError` mentioning `_scan_recent_wallets` and stub; cross-reference comment in `data_feeds/polygon_feed.py` | PR #18, commit `87ccd71` | MITIGATED |
+| Strategy loop could run silently for long stretches between order events | `main.py` emits `strategy_loop_started` once at loop entry and `strategy_loop_heartbeat` every 300 iterations (~60s at 0.20s interval) with `iterations`, `markets_evaluated_total`, `orders_submitted`; follow-up `7f7f934` adds `nonlocal _hb_orders_submitted` in nested `_exec_and_record` | PR #19, commits `415b04c` + `7f7f934` | MITIGATED |
+| No structured per-feed liveness signal for stall detection | `spot_feed_heartbeat` and `polymarket_feed_heartbeat` every 60s (WARNING when stale > 30s) | PR #20, commit `5b89694` | MITIGATED |
 
 Verification on the production droplet (157.230.63.174, `sim` mode):
-all five changes confirmed working end-to-end via direct
+the five fixes that were in the original post-tag batch (T1, T2, T6,
+T11, T10) were confirmed working end-to-end via direct
 `/proc/net/tcp` inspection (T1), startup boot test (T2), three
 rebuild.sh guard paths (T6), a paired regression/kill-switch test
 showing 25 `spot_feed_tick_error` events/min before vs. 0 after (T11),
 and post-deploy mount/ownership/JSON-validity inspection plus a
 follow-up rebuild proving cache persistence via `market_cache_hit` on
-re-start (T10).
+re-start (T10). Rows for T7, T9, T12, and T13 document subsequent merges
+to `main` in the same mitigation-log shape; re-run smoke checks on the
+next production roll.
 
 A v0.2.5 release tag has not yet been cut. Tagging is deferred until
 the remaining Phase 1 / Phase 2 hardening items in
-`CURSOR_TASKS_v0.2.4.md` (T3, T4, T5, T7, T9, T12, T13) land, so
+`CURSOR_TASKS_v0.2.4.md` (T3, T4, T5) land, so
 v0.2.5 can be a single coherent "post-tag hardening" release.
 
 ---
@@ -1308,7 +1315,7 @@ docker run --rm -v "$PWD:/repo" aquasec/trivy fs --severity HIGH,CRITICAL /repo
 | C8 | `.env` inline-comment cleanup on the production droplet (14 → 0) | MEDIUM | ✅ done on disk; takes effect on next container restart |
 | C9 | Audit of exposure window — no successful logins from outside maintainer ISP | (basis for §1.1 downgrade) | ✅ done |
 
-### 12.1.1 Completed post-v0.2.4 (T1, T2, T6, T11)
+### 12.1.1 Completed post-v0.2.4 (T1, T2, T6, T7, T8, T9, T10, T11, T12, T13)
 
 | # | Item | Type | Effort | Owner | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -1316,6 +1323,12 @@ docker run --rm -v "$PWD:/repo" aquasec/trivy fs --severity HIGH,CRITICAL /repo
 | 2 | Cap `kelly_fraction` at 0.50 | code | S | maintainer | DONE 2026-05-04 (PR #10) |
 | 3 | rebuild.sh fail-fast on missing/world-readable `.env` | code | S | maintainer | DONE 2026-05-04 (PR #11) |
 | 4 | `BOT_DISABLE_BINANCE_FEED` env flag | code | S | maintainer | DONE 2026-05-04 (PR #12) |
+| 5 | Drop Telegram `parse_mode: "HTML"` | code | S | maintainer | DONE 2026-05-04 (PR #17) |
+| 6 | Delete dead PascalCase strategies + deprecated `deploy/` duplicates | hygiene | S | maintainer | DONE 2026-05-04 (PR #15) |
+| 7 | Smart-money strategy guard (refuse to load while indexer is a stub) | code | S | maintainer | DONE 2026-05-04 (PR #18) |
+| 8 | Move market cache to `/app/data/market_cache.json` (durable, configurable) | code | S | maintainer | DONE 2026-05-04 (PR #14) |
+| 9 | Strategy loop heartbeat (`strategy_loop_heartbeat` every ~60s) | code | S | maintainer | DONE 2026-05-04 (PR #19) |
+| 10 | Per-feed liveness heartbeats (`spot_feed_heartbeat`, `polymarket_feed_heartbeat`) | code | S | maintainer | DONE 2026-05-04 (PR #20) |
 
 ### 12.2 Still open, ranked by severity × tractability
 

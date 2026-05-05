@@ -1,10 +1,13 @@
 ## [Unreleased]
 
-Post-v0.2.4 security and hygiene fixes. All six changes below are
+Post-v0.2.4 security and hygiene fixes. All ten changes below are
 deployed to production (sim mode) and verified end-to-end. A v0.2.5
 release tag will be cut once the remaining Phase 1 / Phase 2 hardening
 items in `CURSOR_TASKS_v0.2.4.md` land, so v0.2.5 is a single coherent
 "post-tag hardening" release.
+
+Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
+(PR #18) is also under `### Changed`. Task **T12** (PR #19) is under `### Added`.
 
 ### Removed
 
@@ -49,15 +52,25 @@ items in `CURSOR_TASKS_v0.2.4.md` land, so v0.2.5 is a single coherent
   Closes the recurring `market_cache_write_failed: [Errno 13]
   Permission denied` warning at every startup. (PR #14, commit
   82908ec — "T10")
+- `utils/alerts.py`: dropped `parse_mode: "HTML"` from the
+  Telegram webhook payload so untrusted log fields and market
+  symbols can no longer break formatting or inject HTML
+  entities. Body shape is otherwise unchanged; messages render
+  as plain text. (PR #17 — "T7")
+- `config/settings.py`, `data_feeds/polygon_feed.py`: added a
+  `model_validator` on `StrategyConfig` that refuses to load
+  when `BOT_STRAT_SMART_MONEY_ENABLED=true` while the wallet
+  indexer (`data_feeds/polygon_feed.py:_scan_recent_wallets`)
+  is still a stub. Default config (smart-money disabled)
+  loads cleanly; setting the env flag to true now produces a
+  pydantic `ValidationError` at startup mentioning
+  "_scan_recent_wallets" and "stub", instead of the strategy
+  silently scanning an empty wallet list. Cross-reference
+  comment added in `polygon_feed.py` near the stub.
+  (PR #18, commit 87ccd71 — "T9")
 
 ### Added
 
-- Per-feed liveness heartbeats every 60s. `spot_feed_heartbeat`
-  (binance_feed, per active venue, with `ticks_seen`,
-  `last_price`, `seconds_since_last_tick`) and
-  `polymarket_feed_heartbeat` (with `markets_subscribed`,
-  `messages_seen`, `seconds_since_last_message`). WARNING level
-  when stale > 30s to double as a stall indicator (T13).
 - `data_feeds/binance_feed.py`: new `BOT_DISABLE_BINANCE_FEED`
   environment flag (accepts `1`/`true`/`yes`, case-insensitive). When
   set, `_run_venue` returns early for `venue == "binance"` only —
@@ -69,11 +82,31 @@ items in `CURSOR_TASKS_v0.2.4.md` land, so v0.2.5 is a single coherent
   with zero impact on the strategy loop. `.env.example` documents the
   flag in a new block immediately after `BOT_BINANCE_SYMBOLS`.
   (PR #12, commit 6a2e9ed — "T11")
+- `main.py`: strategy loop liveness heartbeat. Emits
+  `strategy_loop_started` once on loop entry and a
+  `strategy_loop_heartbeat` event every 300 iterations
+  (~60s at the 0.20s strategy interval) with `iterations`,
+  `markets_evaluated_total`, `orders_submitted`. Closes the
+  observability gap where the loop's `while not _SHUTDOWN`
+  was silent for arbitrary durations between order events.
+  The follow-up commit `7f7f934` adds `nonlocal
+  _hb_orders_submitted` inside the nested
+  `_exec_and_record` async function — without it, the
+  counter increment would have raised `UnboundLocalError`
+  the first time any strategy submitted an order.
+  (PR #19, commits 415b04c + 7f7f934 — "T12")
+- Per-feed liveness heartbeats every 60s. `spot_feed_heartbeat`
+  (binance_feed, per active venue, with `ticks_seen`,
+  `last_price`, `seconds_since_last_tick`) and
+  `polymarket_feed_heartbeat` (with `markets_subscribed`,
+  `messages_seen`, `seconds_since_last_message`). WARNING level
+  when stale > 30s to double as a stall indicator (T13).
 
 ### Security
 
-- The five changes in `### Changed` and `### Added` above each close a
-  discrete finding from the v2 documentation security review. See
+- The seven changes in `### Changed` and `### Added` above each close a
+  discrete finding from the v2 documentation security review (among
+  them T7, T9, T12, T13). See
   `docs/SECURITY_REVIEW.md` §0.1.1
   ("Mitigation log — 2026-05-04 post-tag patches") for the per-finding
   status update.
