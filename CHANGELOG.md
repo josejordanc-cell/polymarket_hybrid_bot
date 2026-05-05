@@ -104,7 +104,7 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 
 ### Security
 
-- The seven changes in `### Changed` and `### Added` above each close a
+- The nine changes in `### Changed` and `### Added` above each close a
   discrete finding from the v2 documentation security review (among
   them T7, T9, T12, T13). See
   `docs/SECURITY_REVIEW.md` §0.1.1
