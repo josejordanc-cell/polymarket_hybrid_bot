@@ -137,7 +137,7 @@ This audit is the basis for declining the v1 "rotate every secret" recommendatio
 
 ## 0.1.1 Mitigation log — 2026-05-04 post-tag patches
 
-After the v0.2.4 release tag, eleven additional fixes were merged on
+After the v0.2.4 release tag, twelve additional fixes were merged on
 `main` and deployed to production (sim mode). Each closes a finding
 flagged in this review.
 
@@ -163,7 +163,7 @@ rebuild.sh guard paths (T6), a paired regression/kill-switch test
 showing 25 `spot_feed_tick_error` events/min before vs. 0 after (T11),
 and post-deploy mount/ownership/JSON-validity inspection plus a
 follow-up rebuild proving cache persistence via `market_cache_hit` on
-re-start (T10). Rows for T3, T7, T9, T12, T13, and T14 document subsequent merges
+re-start (T10). Rows for T3, T4, T7, T9, T12, T13, and T14 document subsequent merges
 to `main` in the same mitigation-log shape; re-run smoke checks on the
 next production roll.
 
@@ -1317,7 +1317,7 @@ docker run --rm -v "$PWD:/repo" aquasec/trivy fs --severity HIGH,CRITICAL /repo
 | C8 | `.env` inline-comment cleanup on the production droplet (14 → 0) | MEDIUM | ✅ done on disk; takes effect on next container restart |
 | C9 | Audit of exposure window — no successful logins from outside maintainer ISP | (basis for §1.1 downgrade) | ✅ done |
 
-### 12.1.1 Completed post-v0.2.4 (T3, T1, T2, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+### 12.1.1 Completed post-v0.2.4 (T1, T2, T3, T4, T6, T7, T8, T9, T10, T11, T12, T13, T14)
 
 | # | Item | Type | Effort | Owner | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -1333,6 +1333,7 @@ docker run --rm -v "$PWD:/repo" aquasec/trivy fs --severity HIGH,CRITICAL /repo
 | 10 | Per-feed liveness heartbeats (`spot_feed_heartbeat`, `polymarket_feed_heartbeat`) | code | S | maintainer | DONE 2026-05-04 (PR #20) |
 | 11 | Replace misleading Binance API ping in `healthcheck.py` with `spot_feed` heartbeat-based liveness check (renames check from `binance_api` to `spot_feed`) | code | S | maintainer | DONE 2026-05-05 (PR #22) |
 | 12 | Credential field type hardening (HIGH): convert four Polymarket credential fields and `polygon_rpc_url` from `str` to `pydantic.SecretStr` in `config/settings.py`. Twelve callsites updated to `.get_secret_value()` (4 in settings.py validator, 4 in clob_executor ClobClient construction, 1 in polygon_feed RPC init, 1 in main.py:178 reconciliation loop, 1 in wallet_reconcile_cli.py:80, 1 in equity_reconciliation.py:64 conditional unwrap; signature unchanged). SecretStr auto-redacts in `repr()`, `model_dump()`, `__str__`. Production smoke test 2026-05-04: container rebuilt healthy, `strategy_loop_started` (markets: 48), `repr(config.api)` shows all 5 fields as `SecretStr(...)`, zero credential strings in logs | code | S | maintainer | DONE 2026-05-04 (PR #24, `0e3b268` -> `7e783ef`) |
+| 13 | Format validators for env vars (HIGH): add ten pydantic validators in `config/settings.py` so malformed env vars produce hard boot errors instead of silent failures. ApiConfig field validators on `polymarket_host` (https://), `polymarket_ws_url` (wss://), `polygon_rpc_url` (http(s):// when non-empty), `polymarket_private_key` (64 hex chars), `polymarket_api_key` (>=16 chars), `polymarket_api_secret` (>=16 chars), `polymarket_api_passphrase` (non-empty when set). ApiConfig model_validator on `binance_symbols`/`coinbase_symbols` (BASE/QUOTE pattern). BotConfig field validators on `polygon_wallet_address` (40 hex chars after 0x) and `experiment_id` (alphanumeric+underscore+hyphen). Empty-value short-circuits preserve sim mode (no creds set). Existing T3 `_live_mode_requires_keys` model_validator continues to enforce non-emptiness for live mode. Production smoke test 2026-05-04: container rebuilt healthy, `strategy_loop_started` (markets: 48), heartbeats firing, negative test `BOT_POLYMARKET_WS_URL=http://wrong-scheme.example.com` produced expected ValidationError mentioning `wss://`. Test fixture in `tests/test_live_fill_reconciliation.py::live_env` updated in same PR (BOT_POLYMARKET_API_KEY and BOT_POLYMARKET_API_SECRET bumped to 32 chars). | code | M | maintainer | DONE 2026-05-05 (PR #26, `9935ce5` -> `352f8d0`) |
 
 ### 12.2 Still open, ranked by severity × tractability
 
@@ -1355,7 +1356,7 @@ docker run --rm -v "$PWD:/repo" aquasec/trivy fs --severity HIGH,CRITICAL /repo
 | 15 | Hash-pin `requirements.txt` via `pip-compile --generate-hashes` and rebuild image with `--require-hashes` | MEDIUM | S | code |
 | 16 | Add structured log redaction for known secret patterns; codify "no DEBUG in live" policy | MEDIUM | M | code |
 | 17 | §11.5 — `CONTRIBUTING.md` with required local checks; add corresponding GitHub Actions workflow | MEDIUM | M | repo |
-| 18 | Add explicit pydantic validators for every env var (range checks, hex-address checks, URL scheme checks) so v0.2.2-style silent disables become hard boot errors | LOW | M | code |
+| 18 ✅ DONE | Add explicit pydantic validators for every env var (range checks, hex-address checks, URL scheme checks) so v0.2.2-style silent disables become hard boot errors **Done 2026-05-05 as T4 (PR #26, commit `352f8d0`).** | LOW | M | code |
 | 19 | DigitalOcean Cloud Firewall for TCP/22 from maintainer ISP only (defense-in-depth above SSHD + UFW + fail2ban) | LOW | S | ops |
 | 20 | Follow-up pass: review the §10 files I haven't seen yet | LOW | M | docs |
 | 21 | Add `LICENSE` (the README mentions it as TBD) | LOW | S | repo |

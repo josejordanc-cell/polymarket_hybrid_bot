@@ -221,6 +221,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Security
+- **T4:** Add ten pydantic format validators in `config/settings.py` for env vars so malformed
+  values produce hard boot errors. Covers URL scheme (host/ws/rpc), hex format (private key,
+  wallet address), minimum length (api_key, api_secret), non-empty (api_passphrase), symbol
+  pattern (binance/coinbase BASE/QUOTE), and log-safe chars (experiment_id). Empty-value
+  short-circuits preserve sim mode behavior. Existing T3 `_live_mode_requires_keys` validator
+  continues to enforce non-emptiness for live mode. Tests fixture in
+  `tests/test_live_fill_reconciliation.py::live_env` updated in the same PR (api_key and
+  api_secret bumped from 12/11 chars to 32 chars).
 - **T3:** Convert four Polymarket credential fields (`polymarket_private_key`, `polymarket_api_key`, `polymarket_api_secret`, `polymarket_api_passphrase`) and `polygon_rpc_url` from `str` to `pydantic.SecretStr`. Defense-in-depth: SecretStr auto-redacts in `repr()`, `model_dump()`, and `__str__`, so a future logging mistake won't print live credentials. Twelve callsites updated to call `.get_secret_value()` when extracting cleartext (4 in settings.py validator body, 4 in clob_executor ClobClient construction, 1 in polygon_feed RPC init, 1 in main.py reconciliation loop, 1 in wallet_reconcile_cli, 1 in equity_reconciliation).
 
 ## [0.2.3] — 2026-05-03
