@@ -110,6 +110,10 @@ class PolygonSmartMoneyFeed:
     # Wallet scoring (stub — replace with your indexer)
     # ------------------------------------------------------------------
 
+    # Note: BotStrategyConfig refuses to enable smart_money_enabled
+    # until this stub is replaced — see
+    # config/settings.py:_smart_money_indexer_check.
+
     async def _scan_recent_wallets(self) -> None:
         """
         Fetch recent wallet PnL data and upsert scores.
