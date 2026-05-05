@@ -413,6 +413,13 @@ async def run_bot(mode: str) -> None:
         mode=config.runtime.mode,
     )
 
+    # T12: heartbeat counters reset every HEARTBEAT_EVERY iterations.
+    # At default strategy_interval_sec=0.20s, 300 iterations ≈ 60s.
+    HEARTBEAT_EVERY = 300
+    _hb_iterations = 0
+    _hb_markets_evaluated_total = 0
+    _hb_orders_submitted = 0
+
     try:
         while not _SHUTDOWN.is_set():
             if metrics:
@@ -423,6 +430,7 @@ async def run_bot(mode: str) -> None:
                 continue
 
             snapshots = await pm_feed.get_all_snapshots()
+            _hb_markets_evaluated_total += len(snapshots)
             if metrics:
                 metrics.update_active_markets(len(snapshots))
             smart_wallets = polygon_feed.get_qualified_wallets()
@@ -487,6 +495,8 @@ async def run_bot(mode: str) -> None:
 
                 async def _exec_and_record(intent: OrderIntent) -> TradeResult:
                     result = await executor.execute(intent)
+                    if getattr(result, "accepted", False):
+                        _hb_orders_submitted += 1
                     if result.accepted and result.filled_size > 0:
                         risk.on_fill(
                             intent,
@@ -579,6 +589,18 @@ async def run_bot(mode: str) -> None:
 
                     await _exec_and_record(cur)
                     idx += 1
+
+            _hb_iterations += 1
+            if _hb_iterations >= HEARTBEAT_EVERY:
+                logger.info(
+                    "strategy_loop_heartbeat",
+                    iterations=_hb_iterations,
+                    markets_evaluated_total=_hb_markets_evaluated_total,
+                    orders_submitted=_hb_orders_submitted,
+                )
+                _hb_iterations = 0
+                _hb_markets_evaluated_total = 0
+                _hb_orders_submitted = 0
 
             await asyncio.sleep(config.runtime.strategy_interval_sec)
 
