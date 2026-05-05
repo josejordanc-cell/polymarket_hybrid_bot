@@ -137,7 +137,7 @@ This audit is the basis for declining the v1 "rotate every secret" recommendatio
 
 ## 0.1.1 Mitigation log — 2026-05-04 post-tag patches
 
-After the v0.2.4 release tag, ten additional fixes were merged on
+After the v0.2.4 release tag, eleven additional fixes were merged on
 `main` and deployed to production (sim mode). Each closes a finding
 flagged in this review.
 
@@ -153,6 +153,7 @@ flagged in this review.
 | Strategy loop could run silently for long stretches between order events | `main.py` emits `strategy_loop_started` once at loop entry and `strategy_loop_heartbeat` every 300 iterations (~60s at 0.20s interval) with `iterations`, `markets_evaluated_total`, `orders_submitted`; follow-up `7f7f934` adds `nonlocal _hb_orders_submitted` in nested `_exec_and_record` | PR #19, commits `415b04c` + `7f7f934` | MITIGATED |
 | No structured per-feed liveness signal for stall detection | `spot_feed_heartbeat` and `polymarket_feed_heartbeat` every 60s (WARNING when stale > 30s) | PR #20, commit `5b89694` | MITIGATED |
 | `healthcheck.py` cron healthcheck pings `https://api.binance.com/api/v3/ping`, which always returns HTTP 451 from the production droplet's US/DO IP — the check reports `degraded` regardless of bot state, making it a useless signal | Removed `BINANCE_PING_URL` constant and `check_binance_api()`; added `SPOT_FEED_HEARTBEAT_FRESHNESS_SEC = 120` and `check_spot_feed()` that scans `docker logs --since 3m` for `spot_feed_heartbeat` events (newest-first) and reports `ok` when the latest is < 120s old. Renames the check from `binance_api` to `spot_feed`. Disabled venues (T11) no longer trigger false-negative degraded states. Verified on droplet 2026-05-05: `last_heartbeat=20s ago venue=coinbase (limit=120s)` | PR #22, commit `a515728` | MITIGATED |
+| Polymarket credentials stored as plain `str` in `ApiCredentialsConfig` — `polymarket_private_key`, `polymarket_api_key`, `polymarket_api_secret`, `polymarket_api_passphrase`, and `polygon_rpc_url` rendered in cleartext in `repr()` / `model_dump()` / structlog dumps, leaving them one accidental log line away from disclosure | Converted all five fields to `pydantic.SecretStr` in `config/settings.py`; twelve callsites updated to call `.get_secret_value()` when reading cleartext (4 in settings.py validator body, 4 in clob_executor.py ClobClient construction, 1 in polygon_feed.py RPC init, 1 in main.py:178 reconciliation loop, 1 in wallet_reconcile_cli.py:80, 1 in equity_reconciliation.py:64 conditional unwrap). SecretStr auto-redacts in `repr()`, `model_dump()`, and `__str__`. Production smoke test 2026-05-04: container rebuilt healthy, `strategy_loop_started` fires (markets: 48), `equity_reconciliation_disabled` correctly fires with reason `BOT_POLYGON_RPC_URL unset` proving the unwrap path works, `repr(config.api)` confirmed all 5 fields render as `SecretStr(...)` | PR #24, commit `0e3b268` (merge `7e783ef`) | MITIGATED |
 
 Verification on the production droplet (157.230.63.174, `sim` mode):
 the five fixes that were in the original post-tag batch (T1, T2, T6,
@@ -162,7 +163,7 @@ rebuild.sh guard paths (T6), a paired regression/kill-switch test
 showing 25 `spot_feed_tick_error` events/min before vs. 0 after (T11),
 and post-deploy mount/ownership/JSON-validity inspection plus a
 follow-up rebuild proving cache persistence via `market_cache_hit` on
-re-start (T10). Rows for T7, T9, T12, T13, and T14 document subsequent merges
+re-start (T10). Rows for T3, T7, T9, T12, T13, and T14 document subsequent merges
 to `main` in the same mitigation-log shape; re-run smoke checks on the
 next production roll.
 
@@ -1316,7 +1317,7 @@ docker run --rm -v "$PWD:/repo" aquasec/trivy fs --severity HIGH,CRITICAL /repo
 | C8 | `.env` inline-comment cleanup on the production droplet (14 → 0) | MEDIUM | ✅ done on disk; takes effect on next container restart |
 | C9 | Audit of exposure window — no successful logins from outside maintainer ISP | (basis for §1.1 downgrade) | ✅ done |
 
-### 12.1.1 Completed post-v0.2.4 (T1, T2, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+### 12.1.1 Completed post-v0.2.4 (T3, T1, T2, T6, T7, T8, T9, T10, T11, T12, T13, T14)
 
 | # | Item | Type | Effort | Owner | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -1331,6 +1332,7 @@ docker run --rm -v "$PWD:/repo" aquasec/trivy fs --severity HIGH,CRITICAL /repo
 | 9 | Strategy loop heartbeat (`strategy_loop_heartbeat` every ~60s) | code | S | maintainer | DONE 2026-05-04 (PR #19) |
 | 10 | Per-feed liveness heartbeats (`spot_feed_heartbeat`, `polymarket_feed_heartbeat`) | code | S | maintainer | DONE 2026-05-04 (PR #20) |
 | 11 | Replace misleading Binance API ping in `healthcheck.py` with `spot_feed` heartbeat-based liveness check (renames check from `binance_api` to `spot_feed`) | code | S | maintainer | DONE 2026-05-05 (PR #22) |
+| 12 | Credential field type hardening (HIGH): convert four Polymarket credential fields and `polygon_rpc_url` from `str` to `pydantic.SecretStr` in `config/settings.py`. Twelve callsites updated to `.get_secret_value()` (4 in settings.py validator, 4 in clob_executor ClobClient construction, 1 in polygon_feed RPC init, 1 in main.py:178 reconciliation loop, 1 in wallet_reconcile_cli.py:80, 1 in equity_reconciliation.py:64 conditional unwrap; signature unchanged). SecretStr auto-redacts in `repr()`, `model_dump()`, `__str__`. Production smoke test 2026-05-04: container rebuilt healthy, `strategy_loop_started` (markets: 48), `repr(config.api)` shows all 5 fields as `SecretStr(...)`, zero credential strings in logs | code | S | maintainer | DONE 2026-05-04 (PR #24, `0e3b268` -> `7e783ef`) |
 
 ### 12.2 Still open, ranked by severity × tractability
 
