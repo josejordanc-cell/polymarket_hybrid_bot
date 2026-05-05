@@ -61,7 +61,8 @@ def get_polygon_wallet_address(config: Any) -> str:
     override = str(getattr(config, "polygon_wallet_address", "") or "").strip()
     if override:
         return Web3.to_checksum_address(override)
-    pk = getattr(config.api, "polymarket_private_key", "") if hasattr(config, "api") else ""
+    pk_field = getattr(config.api, "polymarket_private_key", "") if hasattr(config, "api") else ""
+    pk = pk_field.get_secret_value() if hasattr(pk_field, "get_secret_value") else pk_field
     if not pk:
         raise ValueError(
             "Set BOT_POLYGON_WALLET_ADDRESS or BOT_POLYMARKET_PRIVATE_KEY to derive the wallet"
