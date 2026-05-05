@@ -52,6 +52,12 @@ items in `CURSOR_TASKS_v0.2.4.md` land, so v0.2.5 is a single coherent
 
 ### Added
 
+- Per-feed liveness heartbeats every 60s. `spot_feed_heartbeat`
+  (binance_feed, per active venue, with `ticks_seen`,
+  `last_price`, `seconds_since_last_tick`) and
+  `polymarket_feed_heartbeat` (with `markets_subscribed`,
+  `messages_seen`, `seconds_since_last_message`). WARNING level
+  when stale > 30s to double as a stall indicator (T13).
 - `data_feeds/binance_feed.py`: new `BOT_DISABLE_BINANCE_FEED`
   environment flag (accepts `1`/`true`/`yes`, case-insensitive). When
   set, `_run_venue` returns early for `venue == "binance"` only —
