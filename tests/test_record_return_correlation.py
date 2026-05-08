@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import numpy as np
+
 from config import get_config
 from risk_manager import RiskManager
 from utils.fill_correlation import record_fill_return_for_correlation
@@ -66,9 +68,36 @@ def test_record_fill_return_skips_zero_size() -> None:
 
 
 def test_approve_orders_reaches_correlation_guard() -> None:
-    """Assert correlation_blocked is consulted — not the guard's numeric conclusion."""
+    """Assert correlation_blocked is consulted and actually blocks a correlated intent.
+
+    Sets up correlated return histories and an open position for mkt-open so
+    that correlation_blocked("mkt-new") returns True post-fix.  Confirms:
+    1. The guard is called with the correct market_id.
+    2. The intent is absent from the approved list (guard rejected it).
+    """
+    rng = np.random.default_rng(42)
+    base = rng.standard_normal(25)
+    noisy = base + rng.standard_normal(25) * 0.01
+
     cfg = get_config()
     risk = RiskManager(cfg)
+
+    for v in base:
+        risk.record_return("mkt-open", float(v))
+    for v in noisy:
+        risk.record_return("mkt-new", float(v))
+
+    open_intent = OrderIntent(
+        market_id="mkt-open",
+        token_id="yes",
+        side="BUY",
+        outcome="YES",
+        size=10.0,
+        price=0.50,
+        strategy="momentum_latency",
+    )
+    risk.on_fill(open_intent, 0.50, 10.0)
+
     intent = OrderIntent(
         market_id="mkt-new",
         token_id="yes",
@@ -83,6 +112,7 @@ def test_approve_orders_reaches_correlation_guard() -> None:
         "correlation_blocked",
         wraps=risk.correlation_blocked,
     ) as guard:
-        risk.approve_orders([intent])
+        approved = risk.approve_orders([intent])
     guard.assert_called()
     assert guard.call_args[0][0] == "mkt-new"
+    assert approved == []
