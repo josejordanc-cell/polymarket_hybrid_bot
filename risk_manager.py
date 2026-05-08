@@ -188,15 +188,15 @@ class RiskManager:
         self._return_history[market_id].append(ret)
 
     def correlation_blocked(self, market_id: str) -> bool:
-        # TODO(Prompt 5 / Task 3): open_positions keys are "{market_id}_{outcome}" but
-        # _return_history is keyed by market_id only — correlated_with lookup is wrong;
-        # refactor out of scope for this PR (see approve_orders call site ~line 229).
         hist_new = np.asarray(self._return_history[market_id])
         if len(hist_new) < 20:
             return False
-        for open_id in self._state.open_positions:
-            if open_id == market_id:
-                continue
+        open_market_ids = {
+            pos.market_id
+            for pos in self._state.open_positions.values()
+            if pos.market_id != market_id
+        }
+        for open_id in open_market_ids:
             hist_open = np.asarray(self._return_history.get(open_id, []))
             n = min(len(hist_new), len(hist_open))
             if n < 20:
