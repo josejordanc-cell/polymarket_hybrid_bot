@@ -45,7 +45,7 @@ Background asyncio tasks started from `main.py`: Polymarket WS feed, Binance fee
 
 ## 4. Risk and execution layer (including new behaviors)
 
-- **Approval:** `RiskManager.approve_orders` enforces kill-switch, position cap, per-trade cap, min notional; **intra_arbitrage bypasses correlation guard**; other strategies use `correlation_blocked` (known bug — see §10).
+- **Approval:** `RiskManager.approve_orders` enforces kill-switch, position cap, per-trade cap, min notional; **intra_arbitrage bypasses correlation guard**; other strategies use `correlation_blocked`.
 - **Fills:** `on_fill` updates equity, positions (`{market_id}_{outcome}` keys), logs **`fill_recorded`**, updates metrics.
 - **Settlement:** `on_settlement` clears losing legs, credits winners, logs **`settlement`** per leg; **`market_resolved`** logged from `main.py` after poll applies settlement.
 - **Live reconciliation:** Order submitted → `pending_orders[order_id]` → poll until terminal → `TradeResult` with actual `filled_size` / price.
@@ -345,7 +345,7 @@ Exit **0** = within threshold; **1** = breach; **2** = error.
 
 ## 10. Known limitations (ops / dashboard framing)
 
-- Correlation guard can block wrong pairs until the open-position keying bug is fixed — **do not rely on it for production risk** without the fix.
+- Correlation guard's pairing keying bug closed 2026-05-08 (T5, PR #28). Guard now actively evaluates; expect `correlation_block` log events in sim. Threshold (`cfg.risk.max_pair_correlation`, default `0.80`) is a tuning concern before live flip.
 - **pUSD / collateral** not in USDC RPC balance → drift alerts can fire during normal Polymarket flows; treat drift as **directional signal**, not absolute truth.
 - **Python 3.10+** required (`slots` on dataclasses); Docker uses **3.11**.
 - **`pending_orders`**: lost on restart; possible duplicate or stuck order handling needs ops playbooks.
