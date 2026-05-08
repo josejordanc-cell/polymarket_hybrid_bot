@@ -58,9 +58,9 @@ Senior-engineer review of the Polymarket hybrid bot after Prompts 1–9. This do
 
 **What works well:** `record_fill_return_for_correlation` computes directional return vs `signal_reference_price` (or snapshot mid) and calls `risk.record_return(market_id, ret)` after each reconciled fill in `main.py` and after arb unwind fills.
 
-**What is fragile:** **Correlation guard pairing bug** (see KNOWN UNFIXED): `correlation_blocked` compares `market_id` to `open_positions` keys shaped as `{market_id}_{outcome}` — lookups into `_return_history` for “open” markets are often wrong or vacuous.
+**What is fragile:** *(Closed 2026-05-08 by T5 — PR #28, commit `704ddcc`.)* The original `correlation_blocked` implementation iterated `open_positions` composite keys (`{market_id}_{outcome}`) and looked them up in `_return_history` (keyed by bare `market_id`); every lookup returned `[]` so the guard was a silent no-op. The fix iterates `self._state.open_positions.values()` and reads `Position.market_id` (option c — matches the existing pattern at `main.py:99,110`). Guard is now actively evaluating.
 
-**Technically correct but operationally questionable:** Until fixed, correlation blocking for non-arb strategies is unreliable; arb bypasses correlation guard by design in `approve_orders`.
+**Technically correct but operationally questionable:** Arb bypasses the correlation guard by design in `approve_orders`; non-arb strategies now correctly evaluate post-T5. Threshold tuning (`cfg.risk.max_pair_correlation`, default `0.80`) is a separate concern before the live flip.
 
 ---
 
@@ -108,7 +108,6 @@ Senior-engineer review of the Polymarket hybrid bot after Prompts 1–9. This do
 
 | Item | Severity | Suggested follow-up |
 |------|----------|---------------------|
-| Correlation guard: `open_positions` keys `{market_id}_{outcome}` vs `_return_history` keyed by `market_id`; `correlation_blocked` iterates wrong keys (`risk_manager.py` ~190–213) | **High** | Fix in next risk PR: derive `market_id` from position keys or maintain parallel index. **Timeline: before relying on correlation for live sizing.** |
 | pUSD / non-USDC collateral not in `wallet_reconcile` | **Medium** | Document; add pUSD or contract balance in P3. **Timeline: before using drift alerts as hard stops.** |
 | Python 3.9 vs 3.11: `@dataclass(slots=True)` in `risk_manager` requires 3.10+ | **Medium** | Enforce 3.11 in CI/Docker only (already in Dockerfile); add `requires-python` in packaging if publishing. **Timeline: immediate doc/CI.** |
 | `backtest.py` calls `notify_fill_metrics` | **Low** | Currently no-op unless an exporter is registered; if backtests register Prometheus, use distinct `experiment_id`/`mode` labels (e.g. `mode=sim` + `experiment_id=backtest`). **Timeline: when wiring metrics to backtests.** |
