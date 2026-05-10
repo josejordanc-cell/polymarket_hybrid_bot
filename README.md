@@ -107,3 +107,27 @@ See `.env.example` for the full `BOT_*` surface (metrics, resolution poll, API k
 - `DEPLOY_DO.md` — DigitalOcean sizing, regions, UFW, cron  
 - `CHANGELOG.md` — Release notes  
 - `docs/` — Deeper design notes from pre–v0.2.1 milestones  
+
+## Repository Files
+
+Top-level files in this repo:
+
+- `CLAUDE.md` — project-level agent discipline rules and observability invariants for AI coding agents working on this repo. Complements `~/.claude/CLAUDE.md` (global). See file for the 12 hard rules and `/verify` auto-invocation triggers.
+- `LICENSE` — proprietary license. All Rights Reserved.
+- `HANDOFF.md` — deployment history and incident runbook.
+- `SECURITY.md` — disclosure policy.
+- `CHANGELOG.md` — version history.
+- `TESTING_CHECKLIST.md` — quick smoke tests.
+- `README.md` — this file.
+
+Documentation under `docs/`:
+
+- `docs/HANDOFF.md` — architecture, strategy priority, and observability contract (load-bearing for any metrics/strategy work).
+- `docs/VALIDATION_CHECKLIST.md` — pre-live-flip gate.
+- `docs/FINAL_CODE_REVIEW.md` — engineering review.
+- `docs/NEXT_STEPS.md` — current priority list.
+- `docs/SECURITY_REVIEW.md` — v2 documentation security review.
+
+Deploy under `deploy/`:
+
+- `deploy/DEPLOY_DO.md` — droplet, UFW, and cron runbook.
