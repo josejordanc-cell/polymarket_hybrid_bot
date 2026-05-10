@@ -220,6 +220,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- LICENSE file at repo root — proprietary "All Rights Reserved" for Jose Jordan, 2026 (PR #30, commit 8b1a517).
+- Project-level CLAUDE.md at repo root — agent discipline rules and observability invariants anchored to docs/HANDOFF.md §5 (PR #31, commit 838f928).
+
+### Notes
+- Both changes are docs/meta-only. No behavioral change. No droplet redeploy required. Image digest unchanged.
+
+
+## [Unreleased]
+
 ### Security
 - **T4:** Add ten pydantic format validators in `config/settings.py` for env vars so malformed
   values produce hard boot errors. Covers URL scheme (host/ws/rpc), hex format (private key,
