@@ -20,7 +20,7 @@ Report privately via one of the following channels (in order of preference):
    "Security" tab and use "Report a vulnerability". This is the preferred
    channel because it produces an audit trail visible to maintainers without
    exposing the report publicly.
-2. Email: `<configure-a-dedicated-security-email-and-paste-here>`.
+2. Email: x.jjtrader@gmail.com.
 
 Include in the report:
 
