@@ -23,3 +23,22 @@ docker-compose.yml
 *.crt
 secrets/
 credentials/
+
+# Wallet, keystore, and credential artifacts (T15 — belt-and-suspenders).
+# Globs are suffix-scoped so source files (e.g. utils/wallet_reconcile_cli.py)
+# are not matched. Mirror+extend the equivalent .gitignore section.
+*.p12
+*.pfx
+*.kdbx
+wallet*.json
+wallet*.dat
+wallet*.txt
+mnemonic*
+private_key*
+private-key*
+keys/
+keystore/
+keystores/
+*.keystore
+# Geth/EVM keystore filename convention (e.g. UTC--2026-...--<address>).
+UTC--*
