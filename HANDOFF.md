@@ -120,3 +120,7 @@ strategy loop.
 The proper fix (deploy as a non-root `bot` user) is still tracked for v0.3.0.
 The chown is a quick fix that will need to be redone if the droplet is
 re-cloned from scratch.
+
+## Agent discipline
+
+For AI coding agents (Claude Code, Cursor, etc.) working on this repo: see `CLAUDE.md` at repo root for project-specific rules, hard invariants, and `/verify` auto-invocation triggers. That file complements the global `~/.claude/CLAUDE.md` and is the load-bearing contract for all agent sessions.
