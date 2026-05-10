@@ -1,3 +1,9 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
 ## [Unreleased]
 
 Post-v0.2.4 security and hygiene fixes. All ten changes below are
@@ -9,18 +15,40 @@ items in `CURSOR_TASKS_v0.2.4.md` land, so v0.2.5 is a single coherent
 Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 (PR #18) is also under `### Changed`. Task **T12** (PR #19) is under `### Added`.
 
-### Removed
+### Added
 
-- Dead PascalCase strategy modules (canonical snake_case versions
-  have been authoritative since v0.2.1):
-  `strategies/IntraArbitrage.py`, `strategies/MarketMaker.py`,
-  `strategies/MomentumLatency.py`, `strategies/SmartMoneyCopy.py`.
-- `data_feeds/spot_feed.py` — superseded by the per-venue feed
-  implementation.
-- Deprecated `deploy/` duplicates: `deploy/Dockerfile`,
-  `deploy/docker-compose.yml`,
-  `deploy/polymarket-hybrid-bot.service`. The canonical Dockerfile
-  and compose live at the repo root; the bot runs under Docker.
+- `data_feeds/binance_feed.py`: new `BOT_DISABLE_BINANCE_FEED`
+  environment flag (accepts `1`/`true`/`yes`, case-insensitive). When
+  set, `_run_venue` returns early for `venue == "binance"` only —
+  Coinbase and other venues are unaffected — and emits a single
+  `binance_feed_disabled` INFO log line with the reason. This is the
+  real disable mechanism that was queued for v0.3.0 in the v0.2.4
+  changelog. In production from a US/DO IP, enabling the flag
+  eliminated ~1500 `spot_feed_tick_error` (HTTP 451) events per hour
+  with zero impact on the strategy loop. `.env.example` documents the
+  flag in a new block immediately after `BOT_BINANCE_SYMBOLS`.
+  (PR #12, commit 6a2e9ed — "T11")
+- `main.py`: strategy loop liveness heartbeat. Emits
+  `strategy_loop_started` once on loop entry and a
+  `strategy_loop_heartbeat` event every 300 iterations
+  (~60s at the 0.20s strategy interval) with `iterations`,
+  `markets_evaluated_total`, `orders_submitted`. Closes the
+  observability gap where the loop's `while not _SHUTDOWN`
+  was silent for arbitrary durations between order events.
+  The follow-up commit `7f7f934` adds `nonlocal
+  _hb_orders_submitted` inside the nested
+  `_exec_and_record` async function — without it, the
+  counter increment would have raised `UnboundLocalError`
+  the first time any strategy submitted an order.
+  (PR #19, commits 415b04c + 7f7f934 — "T12")
+- Per-feed liveness heartbeats every 60s. `spot_feed_heartbeat`
+  (binance_feed, per active venue, with `ticks_seen`,
+  `last_price`, `seconds_since_last_tick`) and
+  `polymarket_feed_heartbeat` (with `markets_subscribed`,
+  `messages_seen`, `seconds_since_last_message`). WARNING level
+  when stale > 30s to double as a stall indicator (T13).
+- LICENSE file at repo root — proprietary "All Rights Reserved" for Jose Jordan, 2026 (PR #30, commit 8b1a517).
+- Project-level CLAUDE.md at repo root — agent discipline rules and observability invariants anchored to docs/HANDOFF.md §5 (PR #31, commit 838f928).
 
 ### Changed
 
@@ -73,38 +101,18 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
   comment added in `polygon_feed.py` near the stub.
   (PR #18, commit 87ccd71 — "T9")
 
-### Added
+### Removed
 
-- `data_feeds/binance_feed.py`: new `BOT_DISABLE_BINANCE_FEED`
-  environment flag (accepts `1`/`true`/`yes`, case-insensitive). When
-  set, `_run_venue` returns early for `venue == "binance"` only —
-  Coinbase and other venues are unaffected — and emits a single
-  `binance_feed_disabled` INFO log line with the reason. This is the
-  real disable mechanism that was queued for v0.3.0 in the v0.2.4
-  changelog. In production from a US/DO IP, enabling the flag
-  eliminated ~1500 `spot_feed_tick_error` (HTTP 451) events per hour
-  with zero impact on the strategy loop. `.env.example` documents the
-  flag in a new block immediately after `BOT_BINANCE_SYMBOLS`.
-  (PR #12, commit 6a2e9ed — "T11")
-- `main.py`: strategy loop liveness heartbeat. Emits
-  `strategy_loop_started` once on loop entry and a
-  `strategy_loop_heartbeat` event every 300 iterations
-  (~60s at the 0.20s strategy interval) with `iterations`,
-  `markets_evaluated_total`, `orders_submitted`. Closes the
-  observability gap where the loop's `while not _SHUTDOWN`
-  was silent for arbitrary durations between order events.
-  The follow-up commit `7f7f934` adds `nonlocal
-  _hb_orders_submitted` inside the nested
-  `_exec_and_record` async function — without it, the
-  counter increment would have raised `UnboundLocalError`
-  the first time any strategy submitted an order.
-  (PR #19, commits 415b04c + 7f7f934 — "T12")
-- Per-feed liveness heartbeats every 60s. `spot_feed_heartbeat`
-  (binance_feed, per active venue, with `ticks_seen`,
-  `last_price`, `seconds_since_last_tick`) and
-  `polymarket_feed_heartbeat` (with `markets_subscribed`,
-  `messages_seen`, `seconds_since_last_message`). WARNING level
-  when stale > 30s to double as a stall indicator (T13).
+- Dead PascalCase strategy modules (canonical snake_case versions
+  have been authoritative since v0.2.1):
+  `strategies/IntraArbitrage.py`, `strategies/MarketMaker.py`,
+  `strategies/MomentumLatency.py`, `strategies/SmartMoneyCopy.py`.
+- `data_feeds/spot_feed.py` — superseded by the per-venue feed
+  implementation.
+- Deprecated `deploy/` duplicates: `deploy/Dockerfile`,
+  `deploy/docker-compose.yml`,
+  `deploy/polymarket-hybrid-bot.service`. The canonical Dockerfile
+  and compose live at the repo root; the bot runs under Docker.
 
 ### Security
 
@@ -114,6 +122,19 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
   `docs/SECURITY_REVIEW.md` §0.1.1
   ("Mitigation log — 2026-05-04 post-tag patches") for the per-finding
   status update.
+- **T4:** Add ten pydantic format validators in `config/settings.py` for env vars so malformed
+  values produce hard boot errors. Covers URL scheme (host/ws/rpc), hex format (private key,
+  wallet address), minimum length (api_key, api_secret), non-empty (api_passphrase), symbol
+  pattern (binance/coinbase BASE/QUOTE), and log-safe chars (experiment_id). Empty-value
+  short-circuits preserve sim mode behavior. Existing T3 `_live_mode_requires_keys` validator
+  continues to enforce non-emptiness for live mode. Tests fixture in
+  `tests/test_live_fill_reconciliation.py::live_env` updated in the same PR (api_key and
+  api_secret bumped from 12/11 chars to 32 chars).
+- **T3:** Convert four Polymarket credential fields (`polymarket_private_key`, `polymarket_api_key`, `polymarket_api_secret`, `polymarket_api_passphrase`) and `polygon_rpc_url` from `str` to `pydantic.SecretStr`. Defense-in-depth: SecretStr auto-redacts in `repr()`, `model_dump()`, and `__str__`, so a future logging mistake won't print live credentials. Twelve callsites updated to call `.get_secret_value()` when extracting cleartext (4 in settings.py validator body, 4 in clob_executor ClobClient construction, 1 in polygon_feed RPC init, 1 in main.py reconciliation loop, 1 in wallet_reconcile_cli, 1 in equity_reconciliation).
+- **T5:** Fix `correlation_blocked` silent no-op in `risk_manager.py:190-213`. The guard iterated `_state.open_positions` keys (composite `{market_id}_{outcome}`) and looked them up in `_return_history` (keyed by bare `market_id`), so every lookup returned `[]` and the `n < 20` early-out always fired — non-arb strategies got zero correlation protection. Fix (option c): iterate `self._state.open_positions.values()` and read `Position.market_id` (zero new state, matches existing access pattern at `main.py:99,110`). Verification: 4 new unit tests in `tests/test_correlation_blocked.py` (correlated→True, uncorrelated→False, n<20→False, self-market→False, seeded numpy); strengthened `tests/test_record_return_correlation.py::test_approve_orders_reaches_correlation_guard` (now asserts `approved == []`); revert-proof smoking-gun test failed on clean revert and passed on staged code; local pytest 24/24 in full suite, 7/7 targeted; droplet smoke 2026-05-08 (`polymarket_hybrid_bot:0.2.4`, Up >2 min healthy, 3 heartbeats firing on cadence, in-container `pytest tests/test_correlation_blocked.py tests/test_record_return_correlation.py` 7/7 PASSED in 0.73s, bidirectional smoke `T5_SMOKE_OK`, 3-minute log scan zero tracebacks). **Note: this fix converts the guard from a silent no-op to actively evaluating** — expect `correlation_block` log events (`logger.warning("correlation_block", ...)` at `risk_manager.py:206-211`) to start appearing in sim post-deploy. That is the guard finally working, not a regression. Threshold tuning (`cfg.risk.max_pair_correlation`, default `0.80`) is a separate post-T5 concern before the live flip. (PR #28, commit `704ddcc`)
+
+### Notes
+- Both changes are docs/meta-only. No behavioral change. No droplet redeploy required. Image digest unchanged.
 
 ## v0.2.4 — 2026-05-04
 
@@ -211,36 +232,6 @@ documentation.
   SUPPRESS_WS_404_WARNINGS
 - PR #8 _(this release)_: docs: commit SECURITY_REVIEW.md v2 and
   CHANGELOG for v0.2.4
-
-# Changelog
-
-All notable changes to this project are documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-
-## [Unreleased]
-
-### Added
-- LICENSE file at repo root — proprietary "All Rights Reserved" for Jose Jordan, 2026 (PR #30, commit 8b1a517).
-- Project-level CLAUDE.md at repo root — agent discipline rules and observability invariants anchored to docs/HANDOFF.md §5 (PR #31, commit 838f928).
-
-### Notes
-- Both changes are docs/meta-only. No behavioral change. No droplet redeploy required. Image digest unchanged.
-
-
-## [Unreleased]
-
-### Security
-- **T4:** Add ten pydantic format validators in `config/settings.py` for env vars so malformed
-  values produce hard boot errors. Covers URL scheme (host/ws/rpc), hex format (private key,
-  wallet address), minimum length (api_key, api_secret), non-empty (api_passphrase), symbol
-  pattern (binance/coinbase BASE/QUOTE), and log-safe chars (experiment_id). Empty-value
-  short-circuits preserve sim mode behavior. Existing T3 `_live_mode_requires_keys` validator
-  continues to enforce non-emptiness for live mode. Tests fixture in
-  `tests/test_live_fill_reconciliation.py::live_env` updated in the same PR (api_key and
-  api_secret bumped from 12/11 chars to 32 chars).
-- **T3:** Convert four Polymarket credential fields (`polymarket_private_key`, `polymarket_api_key`, `polymarket_api_secret`, `polymarket_api_passphrase`) and `polygon_rpc_url` from `str` to `pydantic.SecretStr`. Defense-in-depth: SecretStr auto-redacts in `repr()`, `model_dump()`, and `__str__`, so a future logging mistake won't print live credentials. Twelve callsites updated to call `.get_secret_value()` when extracting cleartext (4 in settings.py validator body, 4 in clob_executor ClobClient construction, 1 in polygon_feed RPC init, 1 in main.py reconciliation loop, 1 in wallet_reconcile_cli, 1 in equity_reconciliation).
-- **T5:** Fix `correlation_blocked` silent no-op in `risk_manager.py:190-213`. The guard iterated `_state.open_positions` keys (composite `{market_id}_{outcome}`) and looked them up in `_return_history` (keyed by bare `market_id`), so every lookup returned `[]` and the `n < 20` early-out always fired — non-arb strategies got zero correlation protection. Fix (option c): iterate `self._state.open_positions.values()` and read `Position.market_id` (zero new state, matches existing access pattern at `main.py:99,110`). Verification: 4 new unit tests in `tests/test_correlation_blocked.py` (correlated→True, uncorrelated→False, n<20→False, self-market→False, seeded numpy); strengthened `tests/test_record_return_correlation.py::test_approve_orders_reaches_correlation_guard` (now asserts `approved == []`); revert-proof smoking-gun test failed on clean revert and passed on staged code; local pytest 24/24 in full suite, 7/7 targeted; droplet smoke 2026-05-08 (`polymarket_hybrid_bot:0.2.4`, Up >2 min healthy, 3 heartbeats firing on cadence, in-container `pytest tests/test_correlation_blocked.py tests/test_record_return_correlation.py` 7/7 PASSED in 0.73s, bidirectional smoke `T5_SMOKE_OK`, 3-minute log scan zero tracebacks). **Note: this fix converts the guard from a silent no-op to actively evaluating** — expect `correlation_block` log events (`logger.warning("correlation_block", ...)` at `risk_manager.py:206-211`) to start appearing in sim post-deploy. That is the guard finally working, not a regression. Threshold tuning (`cfg.risk.max_pair_correlation`, default `0.80`) is a separate post-T5 concern before the live flip. (PR #28, commit `704ddcc`)
 
 ## [0.2.3] — 2026-05-03
 
@@ -378,7 +369,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `docs/HANDOFF.md` rewrite, `docs/FINAL_CODE_REVIEW.md`, `docs/VALIDATION_CHECKLIST.md`, `docs/NEXT_STEPS.md`, `TESTING_CHECKLIST.md`.
 - Add top-level `README.md` as onboarding signpost (post-Prompt 7 polish).
 - Documentation polish: cron fix, validation criteria tightening, sample outputs in HANDOFF (`§5c`), `scripts/weekly_report_cron.sh`, `deploy/DEPLOY_DO.md` Step 5 alignment.
-
-## Unreleased
-
-_No unreleased changes._
