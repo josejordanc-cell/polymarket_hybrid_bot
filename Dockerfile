@@ -21,11 +21,11 @@ RUN apt-get update \
 
 WORKDIR /build
 COPY requirements.txt .
-# When requirements.txt is migrated to hash-pinned form (pip-compile
-# --generate-hashes), add `--require-hashes` here. Tracked in HANDOFF.md.
+# requirements.txt is hash-pinned (pip-compile --generate-hashes from
+# requirements.in); --require-hashes enforces it. See requirements.in.
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip setuptools wheel \
-    && /opt/venv/bin/pip install -r requirements.txt
+    && /opt/venv/bin/pip install --require-hashes -r requirements.txt
 
 # ---- Runtime ---------------------------------------------------------------
 FROM python:3.11-slim-bookworm@sha256:ee710afcfb733f4a750d9be683cf054b5cd247b6c5f5237a6849ea568b90ab15 AS runtime
