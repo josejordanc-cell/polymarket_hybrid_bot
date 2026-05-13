@@ -12,8 +12,9 @@ Design references:
 
 Key invariants:
   - BotState is instantiated ONCE in run_bot(), before the task graph.
-  - The strategy loop acquires _write_lock for multi-field atomic writes.
-  - The snapshot handler acquires _write_lock, calls shallow_copy(), then
+  - The strategy loop acquires write_lock (public accessor) for multi-field
+    atomic writes.
+  - The snapshot handler acquires write_lock, calls shallow_copy(), then
     releases the lock BEFORE serialising. (Minimises lock hold time.)
   - ws_subscribers is NOT copied by shallow_copy() — it is the live list.
   - recent_fills is a deque(maxlen=200); recent_logs maxlen=500;
@@ -127,6 +128,17 @@ class BotState:
         default_factory=asyncio.Lock, repr=False, compare=False
     )
 
+    @property
+    def write_lock(self) -> asyncio.Lock:
+        """Public accessor for the multi-field atomic-write lock.
+
+        Use as ``async with state.write_lock: ...`` from API handlers.
+        The underscore-prefixed attribute remains accessible for internal
+        use within this module but should not be touched from sibling
+        packages.
+        """
+        return self._write_lock
+
     # ------------------------------------------------------------------
     # Constructor helpers
     # ------------------------------------------------------------------
@@ -223,7 +235,7 @@ class BotState:
         """
         Return a point-in-time snapshot copy of this BotState.
 
-        Call this while holding _write_lock, then release the lock and
+        Call this while holding write_lock, then release the lock and
         serialise the copy.  This minimises lock hold time (D.2.1 §D-4).
 
         Mutable collections are copied by value so the caller observes a
@@ -277,7 +289,7 @@ class BotState:
     def apply_strategy_patch(self, patch: Any) -> None:
         """
         Apply a StrategyConfigPatch to the corresponding strategy config
-        in-place.  Caller must hold _write_lock if needed for atomicity.
+        in-place.  Caller must hold write_lock if needed for atomicity.
         """
         current = self.strategy_configs[patch.id]
         self.strategy_configs[patch.id] = current.apply_patch(patch)
