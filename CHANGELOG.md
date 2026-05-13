@@ -50,6 +50,8 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 - LICENSE file at repo root — proprietary "All Rights Reserved" for Jose Jordan, 2026 (PR #30, commit 8b1a517).
 - Project-level CLAUDE.md at repo root — agent discipline rules and observability invariants anchored to docs/HANDOFF.md §5 (PR #31, commit 838f928).
 - **D.2.2 step 1:** Add PyJWT>=2.8.0 direct dep for HS256 WS-ticket verification (api/auth.py, used in D.2.3).
+- **D.2.2 step 2:** Pydantic v2 schemas for BOT_CONTRACT.md Appendix B shapes (api/schemas.py, 19 models incl. WS discriminated union) and BotState dataclass with asyncio.Lock, bounded deques, shallow_copy(), MagicMock-safe from_risk(), and apply_strategy_patch() helper (api/state.py).
+- **D.2.2 step 3:** Bearer and WebSocket ticket auth helpers (api/auth.py): verify_bearer using hmac.compare_digest, verify_ws_ticket using PyJWT HS256 with single-use nonce store (10k-entry FIFO-by-exp eviction, threading.Lock).
 
 ### Changed
 
