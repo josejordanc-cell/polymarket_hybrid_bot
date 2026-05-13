@@ -52,6 +52,14 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 - **D.2.2 step 1:** Add PyJWT>=2.8.0 direct dep for HS256 WS-ticket verification (api/auth.py, used in D.2.3).
 - **D.2.2 step 2:** Pydantic v2 schemas for BOT_CONTRACT.md Appendix B shapes (api/schemas.py, 19 models incl. WS discriminated union) and BotState dataclass with asyncio.Lock, bounded deques, shallow_copy(), MagicMock-safe from_risk(), and apply_strategy_patch() helper (api/state.py).
 - **D.2.2 step 3:** Bearer and WebSocket ticket auth helpers (api/auth.py): verify_bearer using hmac.compare_digest, verify_ws_ticket using PyJWT HS256 with single-use nonce store (10k-entry FIFO-by-exp eviction, threading.Lock).
+- **D.2.2 step 4:** REST handlers and server entry point. api/routes_rest.py implements three handlers: GET /dashboard/snapshot, POST /api/strategies/config, POST /emergency-stop — all Bearer-auth gated via hmac.compare_digest. Snapshot handler uses BotState.shallow_copy() to avoid lock contention; write handlers acquire write_lock. api/server.py provides a run() coroutine wrapping aiohttp AppRunner with shutdown-event polling and graceful teardown.
+- **D.2.2 step 5:** tests/api/ suite — 97 unit and integration tests covering schemas, state, auth, all three REST handlers, and server lifecycle. Mock-only (no real RiskManager). Uses aiohttp.test_utils.TestClient; no new pytest dependencies introduced.
+- **D.2.2 step 6:** HttpApiConfig nested model added to config/settings.py under BotConfig.http_api (env prefix BOT_HTTP_API_). Fields: enabled (bool, default False), bind_host, port (1–65535 validated), bot_api_token (SecretStr), ws_ticket_secret (SecretStr). Model validator requires both secrets present when enabled=True; disabled by default so existing deployments are unaffected. main.py constructs BotState unconditionally in run_bot() before the task graph and appends the api.server.run task conditionally when http_api.enabled is True (lazy import keeps aiohttp off the cold-start path when disabled).
+
+### Deferred
+
+- WebSocket route handlers (api/routes_ws.py) and emit module (api/emit.py) — deferred to D.2.3.
+- Strategy-loop telemetry writing to BotState — deferred to D.2.4. Snapshot handler currently returns OQ-3 stub empties for openPositions, equityHistory, monthlyPnl, backtest, recentLogs, and recentAlerts.
 
 ### Changed
 
