@@ -64,7 +64,7 @@ def _register_sub(sub: str, exp_ts: float) -> bool:
 
 def _get_api(config: Any) -> Any | None:
     """Return config.api if present, else None."""
-    return getattr(config, "api", None)
+    return getattr(config, "http_api", None)
 
 
 def _get_bot_api_token(config: Any) -> str | None:

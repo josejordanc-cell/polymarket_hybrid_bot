@@ -79,7 +79,7 @@ async def run(
     app[CONFIG_KEY] = config
     app.router.add_get("/ws", ws_handler)
 
-    api_cfg = getattr(config, "api", None)
+    api_cfg = getattr(config, "http_api", None)
     port: int = getattr(api_cfg, "port", 8080)
     bind_host: str = getattr(api_cfg, "bind_host", "0.0.0.0")
 
