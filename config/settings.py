@@ -236,6 +236,36 @@ class RuntimeConfig(BaseSettings):
         return v
 
 
+class HttpApiConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_prefix="BOT_HTTP_API_", extra="ignore"
+    )
+
+    enabled: bool = Field(default=False)
+    bind_host: str = Field(default="0.0.0.0")
+    port: int = Field(default=8080, ge=1, le=65535)
+    bot_api_token: SecretStr = Field(default=SecretStr(""))
+    ws_ticket_secret: SecretStr = Field(default=SecretStr(""))
+
+    @model_validator(mode="after")
+    def _require_secrets_when_enabled(self) -> "HttpApiConfig":
+        if self.enabled:
+            missing = [
+                name
+                for name, val in {
+                    "bot_api_token": self.bot_api_token.get_secret_value(),
+                    "ws_ticket_secret": self.ws_ticket_secret.get_secret_value(),
+                }.items()
+                if not val
+            ]
+            if missing:
+                raise ValueError(
+                    f"HttpApiConfig.enabled=True requires these env vars to be set: "
+                    f"{missing}"
+                )
+        return self
+
+
 # ---------------------------------------------------------------------------
 # Composite root config
 # ---------------------------------------------------------------------------
@@ -246,6 +276,7 @@ class BotConfig(BaseSettings):
     )
 
     api: ApiConfig = Field(default_factory=ApiConfig)
+    http_api: HttpApiConfig = Field(default_factory=HttpApiConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)

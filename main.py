@@ -377,6 +377,11 @@ async def run_bot(mode: str) -> None:
     sm = SmartMoneyCopyStrategy(config)
     executor = CLOBExecutor(config)
 
+    # ── Shared bot state (written by strategy loop, read by HTTP API) ─────
+    from api.state import BotState
+
+    state = BotState.from_risk(risk, config)
+
     # ── Start background feed tasks ────────────────────────────────────────
     tasks = [
         asyncio.create_task(
@@ -395,6 +400,16 @@ async def run_bot(mode: str) -> None:
         ),
         asyncio.create_task(_SHUTDOWN.wait(), name="shutdown_watcher"),
     ]
+
+    if config.http_api.enabled:
+        from api.server import run as http_server_run
+
+        tasks.append(
+            asyncio.create_task(
+                http_server_run(state, config, _SHUTDOWN),
+                name="http_api_server",
+            )
+        )
 
     # ── Feed warmup: wait for first data before firing strategies ──────────
     logger.info("feed_warmup_start", seconds=_FEED_WARMUP_SEC)
