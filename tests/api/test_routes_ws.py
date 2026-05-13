@@ -26,7 +26,7 @@ from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from api.emit import Emitter
-from api.routes_ws import ws_handler
+from api.routes_ws import CONFIG_KEY, EMITTER_KEY, ws_handler
 
 
 # ---------------------------------------------------------------------------
@@ -70,8 +70,8 @@ async def ws_test_client(bot_config):
     """Yield (client, emitter) — emitter is the real one wired into app."""
     emitter = Emitter()
     app = web.Application()
-    app["emitter"] = emitter
-    app["config"] = bot_config
+    app[EMITTER_KEY] = emitter
+    app[CONFIG_KEY] = bot_config
     app.router.add_get("/ws", ws_handler)
 
     server = TestServer(app)

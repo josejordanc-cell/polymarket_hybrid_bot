@@ -31,15 +31,14 @@ Lifecycle on successful auth:
      The handler's ``finally`` block owns the unregister lifecycle —
      ``Emitter.stream_to_client`` does NOT unregister itself.
 
-Dependencies are read from ``request.app``:
-    request.app["emitter"] -> api.emit.Emitter
-    request.app["config"]  -> BotConfig (for verify_ws_ticket)
-Both keys are populated by ``api/server.py:run()`` in D.2.3 Step 4.
+Dependencies are read from ``request.app`` via typed aiohttp ``AppKey``s:
+    request.app[EMITTER_KEY] -> api.emit.Emitter
+    request.app[CONFIG_KEY]  -> BotConfig (passed as Any to verify_ws_ticket)
+Both keys are populated by ``api/server.py:run()``.
 """
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 import structlog
 from aiohttp import web
@@ -48,6 +47,14 @@ from api.auth import verify_ws_ticket
 from api.emit import Emitter
 
 logger = structlog.get_logger(__name__)
+
+
+# Typed application keys (aiohttp ≥3.9). Defined here — alongside the
+# handler that consumes them — so api/server.py imports them rather
+# than declaring its own loose string keys. Using AppKey silences the
+# NotAppKeyWarning emitted by aiohttp when string keys are used.
+EMITTER_KEY: web.AppKey[Emitter] = web.AppKey("emitter", Emitter)
+CONFIG_KEY: web.AppKey = web.AppKey("config")
 
 
 # Per BOT_CONTRACT.md §3.2: the 4001 close code is reserved for
@@ -60,8 +67,8 @@ _WS_CLOSE_AUTH_MSG: bytes = b"auth_required"
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     """Accept a WebSocket upgrade at ``GET /ws`` and stream broadcasts."""
-    emitter: Emitter = request.app["emitter"]
-    config: Any = request.app["config"]
+    emitter: Emitter = request.app[EMITTER_KEY]
+    config = request.app[CONFIG_KEY]
 
     ws = web.WebSocketResponse()
     await ws.prepare(request)
