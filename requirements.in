@@ -53,6 +53,8 @@ pydantic-settings>=2.2.0,<3
 structlog>=24.1.0
 ccxt[async]>=4.2.0
 prometheus-client==0.21.1
+# - PyJWT for HS256 JWT verification of WS tickets (see api/auth.py)
+PyJWT>=2.8.0
 
 # --- Tests (followup: move pytest/pytest-asyncio into pyproject extras) ---
 pytest>=8.0,<9.0

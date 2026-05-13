@@ -49,6 +49,7 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
   when stale > 30s to double as a stall indicator (T13).
 - LICENSE file at repo root — proprietary "All Rights Reserved" for Jose Jordan, 2026 (PR #30, commit 8b1a517).
 - Project-level CLAUDE.md at repo root — agent discipline rules and observability invariants anchored to docs/HANDOFF.md §5 (PR #31, commit 838f928).
+- **D.2.2 step 1:** Add PyJWT>=2.8.0 direct dep for HS256 WS-ticket verification (api/auth.py, used in D.2.3).
 
 ### Changed
 
