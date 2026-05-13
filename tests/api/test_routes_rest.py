@@ -28,7 +28,7 @@ from api.state import BotState
 
 
 def _auth_headers(bot_config) -> dict[str, str]:
-    token = bot_config.api.bot_api_token.get_secret_value()
+    token = bot_config.http_api.bot_api_token.get_secret_value()
     return {"Authorization": f"Bearer {token}"}
 
 

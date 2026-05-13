@@ -99,7 +99,7 @@ class TestVerifyBearer:
         # Build a fresh inline MagicMock; bot_api_token = None triggers
         # _get_bot_api_token to return None.
         bad_config = MagicMock()
-        bad_config.api.bot_api_token = None
+        bad_config.http_api.bot_api_token = None
         headers = {"Authorization": "Bearer test-bearer-token-abc123"}
         assert verify_bearer(headers, bad_config) is False
 
@@ -112,17 +112,17 @@ class TestVerifyWsTicket:
     """Tests for verify_ws_ticket(token, config)."""
 
     def test_valid_ticket(self, bot_config: MagicMock) -> None:
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret)
         assert verify_ws_ticket(token, bot_config) is True
 
     def test_expired_ticket(self, bot_config: MagicMock) -> None:
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret, exp=int(time.time()) - 10)
         assert verify_ws_ticket(token, bot_config) is False
 
     def test_tampered_signature(self, bot_config: MagicMock) -> None:
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret)
         parts = token.split(".")
         # Replace the signature segment with garbage.
@@ -135,14 +135,14 @@ class TestVerifyWsTicket:
         assert verify_ws_ticket(token, bot_config) is False
 
     def test_missing_sub(self, bot_config: MagicMock) -> None:
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret, include_sub=False)
         assert verify_ws_ticket(token, bot_config) is False
 
     def test_missing_iat(self, bot_config: MagicMock) -> None:
         # Must include a valid sub so the sub guard (line 228) does NOT fire
         # first — the iat guard (line 234) is the intended failure point.
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret, include_iat=False)
         assert verify_ws_ticket(token, bot_config) is False
 
@@ -153,13 +153,13 @@ class TestVerifyWsTicket:
         # Build a fresh inline MagicMock; ws_ticket_secret = None triggers
         # _get_ws_ticket_secret to return None.
         bad_config = MagicMock()
-        bad_config.api.ws_ticket_secret = None
+        bad_config.http_api.ws_ticket_secret = None
         # Use a real secret just to build a syntactically valid token.
         token = _make_ticket("some-secret")
         assert verify_ws_ticket(token, bad_config) is False
 
     def test_single_use_replay(self, bot_config: MagicMock) -> None:
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         # Pin the sub so both calls use the same nonce.
         pinned_sub = f"replay-sub-{uuid.uuid4()}"
         token = _make_ticket(secret, sub=pinned_sub)
@@ -169,6 +169,6 @@ class TestVerifyWsTicket:
         assert second is False
 
     def test_wrong_algorithm(self, bot_config: MagicMock) -> None:
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret, algorithm="HS512")
         assert verify_ws_ticket(token, bot_config) is False

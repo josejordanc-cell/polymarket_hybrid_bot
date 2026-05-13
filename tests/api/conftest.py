@@ -19,16 +19,16 @@ def bot_config() -> MagicMock:
     """MagicMock mimicking BotConfig with a nested .api block.
 
     Mirrors the surface api/auth.py and api/server.py read via getattr:
-        config.api.bot_api_token.get_secret_value() -> str
-        config.api.ws_ticket_secret.get_secret_value() -> str
-        config.api.port -> int
-        config.api.bind_host -> str
+        config.http_api.bot_api_token.get_secret_value() -> str
+        config.http_api.ws_ticket_secret.get_secret_value() -> str
+        config.http_api.port -> int
+        config.http_api.bind_host -> str
     """
     config = MagicMock()
-    config.api.bot_api_token.get_secret_value.return_value = "test-bearer-token-abc123"
-    config.api.ws_ticket_secret.get_secret_value.return_value = "test-ws-secret-xyz789"
-    config.api.port = 8080
-    config.api.bind_host = "127.0.0.1"
+    config.http_api.bot_api_token.get_secret_value.return_value = "test-bearer-token-abc123"
+    config.http_api.ws_ticket_secret.get_secret_value.return_value = "test-ws-secret-xyz789"
+    config.http_api.port = 8080
+    config.http_api.bind_host = "127.0.0.1"
     return config
 
 

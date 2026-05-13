@@ -110,7 +110,7 @@ class TestWsAuth:
         self, ws_test_client, bot_config
     ) -> None:
         client, emitter = ws_test_client
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret, exp=int(time.time()) - 10)
         async with client.ws_connect(f"/ws?ticket={token}") as ws:
             msg = await ws.receive(timeout=2.0)
@@ -122,7 +122,7 @@ class TestWsAuth:
         self, ws_test_client, bot_config
     ) -> None:
         client, emitter = ws_test_client
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         pinned_sub = f"ws-replay-{uuid.uuid4()}"
         token = _make_ticket(secret, sub=pinned_sub)
 
@@ -145,7 +145,7 @@ class TestWsAuth:
         self, ws_test_client, bot_config
     ) -> None:
         client, emitter = ws_test_client
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret, algorithm="HS512")
         async with client.ws_connect(f"/ws?ticket={token}") as ws:
             msg = await ws.receive(timeout=2.0)
@@ -164,7 +164,7 @@ class TestWsLifecycle:
         self, ws_test_client, bot_config
     ) -> None:
         client, emitter = ws_test_client
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret)
         async with client.ws_connect(f"/ws?ticket={token}") as ws:
             assert await _wait_for(
@@ -179,7 +179,7 @@ class TestWsLifecycle:
         self, ws_test_client, bot_config
     ) -> None:
         client, emitter = ws_test_client
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret)
         async with client.ws_connect(f"/ws?ticket={token}") as ws:
             assert await _wait_for(
@@ -198,7 +198,7 @@ class TestWsLifecycle:
         self, ws_test_client, bot_config
     ) -> None:
         client, emitter = ws_test_client
-        secret = bot_config.api.ws_ticket_secret.get_secret_value()
+        secret = bot_config.http_api.ws_ticket_secret.get_secret_value()
         token = _make_ticket(secret)
         async with client.ws_connect(f"/ws?ticket={token}") as ws:
             assert await _wait_for(

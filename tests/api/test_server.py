@@ -71,7 +71,7 @@ async def test_server_starts_and_emits_started_log(
     mock_logger: MagicMock,
 ) -> None:
     """run() logs api_server_started and api_server_stopped on normal path."""
-    bot_config.api.port = 0
+    bot_config.http_api.port = 0
     await _run_and_shutdown(bot_state, bot_config)
     mock_logger.info.assert_any_call("api_server_started", host="127.0.0.1", port=0)
     mock_logger.info.assert_any_call("api_server_stopped")
@@ -84,7 +84,7 @@ async def test_server_graceful_shutdown_on_event(
     mock_logger: MagicMock,
 ) -> None:
     """Setting the shutdown Event causes run() to exit cleanly (no exception)."""
-    bot_config.api.port = 0
+    bot_config.http_api.port = 0
     shutdown = asyncio.Event()
     task = asyncio.ensure_future(run(bot_state, bot_config, shutdown))
     await asyncio.sleep(0.05)
@@ -102,7 +102,7 @@ async def test_server_task_not_done_before_shutdown(
     mock_logger: MagicMock,
 ) -> None:
     """run() blocks (task not done) until the shutdown event is set."""
-    bot_config.api.port = 0
+    bot_config.http_api.port = 0
     shutdown = asyncio.Event()
     task = asyncio.ensure_future(run(bot_state, bot_config, shutdown))
     await asyncio.sleep(0.05)
@@ -118,9 +118,9 @@ async def test_server_uses_config_bind_host_and_port(
     bot_state: Any,
     mock_logger: MagicMock,
 ) -> None:
-    """run() reads bind_host and port from config.api and passes them to TCPSite."""
-    bot_config.api.port = 0
-    bot_config.api.bind_host = "127.0.0.1"
+    """run() reads bind_host and port from config.http_api and passes them to TCPSite."""
+    bot_config.http_api.port = 0
+    bot_config.http_api.bind_host = "127.0.0.1"
     await _run_and_shutdown(bot_state, bot_config)
     mock_logger.info.assert_any_call("api_server_started", host="127.0.0.1", port=0)
 
@@ -135,7 +135,7 @@ async def test_server_cleanup_runs_on_normal_shutdown(
     """runner.cleanup() is called exactly once on graceful shutdown (finally block)."""
     cleanup_mock = AsyncMock()
     monkeypatch.setattr(web.AppRunner, "cleanup", cleanup_mock)
-    bot_config.api.port = 0
+    bot_config.http_api.port = 0
     await _run_and_shutdown(bot_state, bot_config)
     cleanup_mock.assert_called_once()
 
@@ -153,7 +153,7 @@ async def test_server_fatal_error_reraises_and_logs_critical(
         "start",
         AsyncMock(side_effect=RuntimeError("simulated boom")),
     )
-    bot_config.api.port = 0
+    bot_config.http_api.port = 0
     shutdown = asyncio.Event()
     task = asyncio.ensure_future(run(bot_state, bot_config, shutdown))
     with pytest.raises(RuntimeError, match="simulated boom"):
@@ -179,7 +179,7 @@ async def test_server_cleanup_runs_on_fatal_error(
     )
     cleanup_mock = AsyncMock()
     monkeypatch.setattr(web.AppRunner, "cleanup", cleanup_mock)
-    bot_config.api.port = 0
+    bot_config.http_api.port = 0
     shutdown = asyncio.Event()
     task = asyncio.ensure_future(run(bot_state, bot_config, shutdown))
     with pytest.raises(RuntimeError):
