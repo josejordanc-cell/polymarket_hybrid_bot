@@ -12,6 +12,7 @@ Async Polymarket hybrid strategies (sim default): feeds → risk → priority st
 | WebSocket (Polymarket CLOB) | **Degraded** — CLOB WebSocket upgrade may return **404**; the bot uses REST polling as the stable operational fallback |
 | Binance spot feed | **Disabled by default in restricted regions via** `BOT_DISABLE_BINANCE_FEED=true` (added in T11). Without the flag, US/most DO POPs still receive HTTP 451 from `api.binance.com`. Coinbase remains the live reference feed in those regions. |
 | Weekly report (`scripts/weekly_report.py`) | Reads `data/trades.jsonl` JSONL; empty / missing file handled gracefully |
+| HTTP/WebSocket dashboard API (v0.2.6+) | **Optional, disabled by default.** Set `BOT_HTTP_API_ENABLED=true` plus `BOT_HTTP_API_BOT_API_TOKEN` and `BOT_HTTP_API_WS_TICKET_SECRET` to expose `GET /dashboard/snapshot`, `POST /api/strategies/config`, `POST /emergency-stop` (Bearer auth) and `GET /ws` (HS256 JWT ticket auth via `?ticket=<jwt>`). Bind defaults to `0.0.0.0:8080` inside the container — pair with a loopback `ports:` block in `docker-compose.yml` (`127.0.0.1:8080:8080`) for droplet exposure. Strategy-loop telemetry → broadcast wiring is deferred to D.2.4; until then `/ws` upgrades succeed but no app-level messages are emitted. See `api/` module and the v0.2.7 CHANGELOG entry. |
 
 ## Quick start
 
