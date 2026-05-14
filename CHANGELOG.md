@@ -55,14 +55,6 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 - **D.2.2 step 4:** REST handlers and server entry point. api/routes_rest.py implements three handlers: GET /dashboard/snapshot, POST /api/strategies/config, POST /emergency-stop — all Bearer-auth gated via hmac.compare_digest. Snapshot handler uses BotState.shallow_copy() to avoid lock contention; write handlers acquire write_lock. api/server.py provides a run() coroutine wrapping aiohttp AppRunner with shutdown-event polling and graceful teardown.
 - **D.2.2 step 5:** tests/api/ suite — 97 unit and integration tests covering schemas, state, auth, all three REST handlers, and server lifecycle. Mock-only (no real RiskManager). Uses aiohttp.test_utils.TestClient; no new pytest dependencies introduced.
 - **D.2.2 step 6:** HttpApiConfig nested model added to config/settings.py under BotConfig.http_api (env prefix BOT_HTTP_API_). Fields: enabled (bool, default False), bind_host, port (1–65535 validated), bot_api_token (SecretStr), ws_ticket_secret (SecretStr). Model validator requires both secrets present when enabled=True; disabled by default so existing deployments are unaffected. main.py constructs BotState unconditionally in run_bot() before the task graph and appends the api.server.run task conditionally when http_api.enabled is True (lazy import keeps aiohttp off the cold-start path when disabled).
-- **D.2.3 step 1:** api/emit.py — Emitter broadcaster for WebSocket fan-out. Owns the registry of connected WS clients keyed by opaque connection_id, exposes register/unregister/broadcast/stream_to_client. Per-client bounded asyncio.Queue (default maxsize=256). Back-pressure policy (D.2.1 §D-5, simplified per D.2.3 brief): successful put_nowait resets a per-client strike counter; three consecutive asyncio.QueueFull events schedule that client's ws.close(code=1011) + unregister in the background, leaving other clients unaffected.
-- **D.2.3 step 2:** api/routes_ws.py — WebSocket route handler. Reads ticket from ?ticket=<jwt> query parameter and gates the upgrade through api.auth.verify_ws_ticket (HS256-only, exp + iat + single-use sub). On any auth failure (missing / bad-signature / expired / replayed / wrong-algorithm) the upgrade completes and the client receives a uniform WebSocket close frame with code 4001 "auth_required" per BOT_CONTRACT.md §3.2 (failure modes are deliberately indistinguishable). On success, registers with the Emitter, spawns a per-connection streamer task that drains the queue to ws.send_json, and runs an inbound log-and-drop loop. The handler's finally block owns the unregister lifecycle.
-- **D.2.3 step 3:** tests/api/test_emit.py (10 tests) + tests/api/test_routes_ws.py (8 tests) — register/unregister cycles, broadcast fan-out to N=0/1/3 clients, backpressure strike counter (increment, reset on success, 3-strike disconnect), peer isolation under back-pressure, five 4001-close paths (missing / bad-sig / expired / replay / HS512), happy-path upgrade + broadcast delivery, client-initiated close → unregister. WebSocketResponse is mocked with AsyncMock for the unit suite; the route tests spin up a real aiohttp TestClient + TestServer. Full tests/api/ run: 115 passed (97 D.2.2 carry-over + 18 new).
-
-### Deferred
-
-- Strategy-loop telemetry writing to BotState — deferred to D.2.4. Snapshot handler currently returns OQ-3 stub empties for openPositions, equityHistory, monthlyPnl, backtest, recentLogs, and recentAlerts. D.2.4 will also wire `emitter.broadcast(...)` into the strategy loop's fill / alert / strategy-update paths (D.2.3 set up the infrastructure but does not produce messages from real strategy execution).
-
 ### Changed
 
 - T14: `healthcheck.py` — replace Binance API ping (always 451 from
@@ -151,6 +143,30 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 
 ### Notes
 - Both changes are docs/meta-only. No behavioral change. No droplet redeploy required. Image digest unchanged.
+
+## v0.2.7 — 2026-05-13
+
+D.2.3 — WebSocket broadcaster module wired on top of v0.2.6's REST API. REST contract frozen since v0.2.6 (`api/schemas.py` blob `8ccdb63c`, `api/routes_rest.py` blob `8ae836cf`).
+
+### Added
+
+- **D.2.3 step 1:** api/emit.py — Emitter broadcaster for WebSocket fan-out. Owns the registry of connected WS clients keyed by opaque connection_id, exposes register/unregister/broadcast/stream_to_client. Per-client bounded asyncio.Queue (default maxsize=256). Back-pressure policy (D.2.1 §D-5, simplified per D.2.3 brief): successful put_nowait resets a per-client strike counter; three consecutive asyncio.QueueFull events schedule that client's ws.close(code=1011) + unregister in the background, leaving other clients unaffected.
+- **D.2.3 step 2:** api/routes_ws.py — WebSocket route handler. Reads ticket from ?ticket=<jwt> query parameter and gates the upgrade through api.auth.verify_ws_ticket (HS256-only, exp + iat + single-use sub). On any auth failure (missing / bad-signature / expired / replayed / wrong-algorithm) the upgrade completes and the client receives a uniform WebSocket close frame with code 4001 "auth_required" per BOT_CONTRACT.md §3.2 (failure modes are deliberately indistinguishable). On success, registers with the Emitter, spawns a per-connection streamer task that drains the queue to ws.send_json, and runs an inbound log-and-drop loop. The handler's finally block owns the unregister lifecycle.
+- **D.2.3 step 3:** tests/api/test_emit.py (10 tests) + tests/api/test_routes_ws.py (8 tests) — register/unregister cycles, broadcast fan-out to N=0/1/3 clients, backpressure strike counter (increment, reset on success, 3-strike disconnect), peer isolation under back-pressure, five 4001-close paths (missing / bad-sig / expired / replay / HS512), happy-path upgrade + broadcast delivery, client-initiated close → unregister. WebSocketResponse is mocked with AsyncMock for the unit suite; the route tests spin up a real aiohttp TestClient + TestServer. Full tests/api/ run: 115 passed (97 D.2.2 carry-over + 18 new).
+- **D.2.3 step 4:** api/server.py wiring — instantiates Emitter in app[EMITTER_KEY], registers GET /ws via app.router.add_get, and replaces ad-hoc app[...] string keys with typed aiohttp AppKey to eliminate 16 NotAppKeyWarning lines at startup. (commit dcd6b51)
+
+### Fixed
+
+- **D.2.3 step 5 hotfix:** api/auth.py and api/server.py were reading `getattr(config, "api", None)` — the legacy ApiConfig — instead of `getattr(config, "http_api", None)` where D.2.2 step 6's HttpApiConfig (bot_api_token + ws_ticket_secret + bind_host + port) actually attaches at BotConfig.http_api with env prefix `BOT_HTTP_API_`. Production droplet smoke against /dashboard/snapshot returned 401 with log event `bearer_verify_config_missing`; the bug was masked by all 97 D.2.2 + 18 D.2.3 unit tests because the bot_config fixture is a bare MagicMock that auto-vivifies any attribute path and returns truthy. Fixed in two commits: 7c0e313 (2-line source fix in auth.py + server.py) and d39696a (5-file fixture + test realignment from `bot_config.api.*` → `bot_config.http_api.*`). After fix: tests/api/ back to 115 passed; droplet smokes A (REST Bearer → 200 + JSON), B (WS valid HS256 ticket → upgrade held with full register/unregister lifecycle log events), and C (WS bad ticket → CLOSE 4001 + ws_ticket_invalid log event) all green.
+
+### Deferred
+
+- Strategy-loop telemetry writing to BotState — deferred to D.2.4. Snapshot handler currently returns OQ-3 stub empties for openPositions, equityHistory, monthlyPnl, backtest, recentLogs, and recentAlerts. D.2.4 will also wire `emitter.broadcast(...)` into the strategy loop's fill / alert / strategy-update paths (D.2.3 set up the infrastructure but does not produce messages from real strategy execution).
+- Permanent persistence of the operator-local `ports: - "127.0.0.1:8080:8080"` mapping in docker-compose.yml. Currently reapplied manually on the droplet after each `git pull` because the upstream compose file omits the block. D.2.4 will either commit a tracked `docker-compose.override.yml` or env-var-gate the `ports:` stanza via `BOT_HTTP_API_EXPOSE_PORT`.
+
+### Operator notes
+
+- HTTP/WebSocket API surface remains disabled by default (`BotConfig.http_api.enabled = False`). To enable on a droplet: set `BOT_HTTP_API_ENABLED=true`, `BOT_HTTP_API_BOT_API_TOKEN=<openssl rand -hex 32>`, `BOT_HTTP_API_WS_TICKET_SECRET=<openssl rand -hex 32>` in `.env` (mode 600); restart the container; bind defaults to `0.0.0.0:8080` inside the container — pair with a loopback `ports:` block in docker-compose.yml so only the droplet itself can reach 8080.
 
 ## v0.2.4 — 2026-05-04
 
