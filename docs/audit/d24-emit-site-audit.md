@@ -144,3 +144,125 @@ Per §4. Follow-up commit, not D.2.4-blocking. Migrate `tests/api/conftest.py` `
 ---
 
 *Gate closed 2026-05-13. D.2.4 source changes may begin. If any emit-site source change adds a `config.*` access not documented in §5, this file must be reopened (status → GATE OPEN) and the new access verified before that source change lands.*
+
+---
+
+## 9. Step landings (filled as each step lands)
+
+### 9.1 ALERT step — landed at SHA `<COMMIT-SHA-AFTER-COMMIT>`
+
+Wire-up + envelope reconciliation per §10. No `config.*` access introduced
+(audit §5.2 verified N/A). Emitter handoff: module-level singleton
+(`_emitter`, `set_emitter`, `get_emitter` in `utils/alerts.py`), mirroring
+`observability/metrics_exporter.py` precedent.
+
+### 9.2 FILL step — *not yet landed*
+
+### 9.3 STRATEGY_UPDATE step — *not yet landed*
+
+---
+
+## 10. Schema drift discovery + reconciliation
+
+### Background
+
+The audit gate closed on 2026-05-13 verifying only `config.*` access
+patterns (§5). It did not verify the WS payload schema shapes against the
+dashboard's zod contract, because §5.2 punted with "ALERT per BOT_CONTRACT"
+without naming which side's contract was canonical when they disagreed.
+No D.2.3 test ever built an ALERT-, FILL-, or TICK-shaped envelope; the
+Emitter unit tests only used `{"type": "TEST"}`. The drift survived v0.2.7
+release and was discovered at the start of D.2.4 step 1 (ALERT).
+
+### What was wrong
+
+Three envelope-shape bugs and one field-set bug.
+
+**Envelope nesting:** the bot defined `WsTickPayload`, `WsFillPayload`, and
+`WsAlertPayload` classes that each wrapped the inner type under a named
+key (`.tick`, `.fill`, `.alert`). Wire shape would have been e.g.:
+
+```json
+{"type": "ALERT", "payload": {"alert": {<AlertItem fields>}}}
+```
+
+Dashboard `components/dashboard/schemas.ts:215` defines
+`WsMessageSchema = z.discriminatedUnion("type", [ ..., z.object({ type:
+z.literal("ALERT"), payload: AlertItemSchema }), ... ])`. Dashboard
+`lib/applyWsMessage.ts:58` reads `message.payload` as the `AlertItem`
+directly. So the dashboard expected flat:
+
+```json
+{"type": "ALERT", "payload": {<AlertItem fields>}}
+```
+
+Same flat shape for TICK and FILL. If the bot had broadcast through its
+old envelopes, dashboard zod parsing would have silently dropped every
+TICK / FILL / ALERT (no crash; `applyWsMessage` logs a warning and
+discards). The droplet's D.2.3 smokes only exercised WS upgrade and ticket
+auth, never an actual emit, so this never surfaced in production.
+
+**`AlertItem` field-set drift:** bot had `ts: int` (epoch ms), no
+`source`, plus extra fields `acknowledged: bool` and
+`strategy: Optional[StrategyId]`, and a severity literal that included
+`"error"` in addition to `"info"/"warning"/"critical"`. Dashboard
+`AlertItemSchema` (line 163) has `time: z.string()`, `source: z.string()`,
+no `acknowledged` or `strategy`, and severity narrowed to three values.
+
+### Why the gate didn't catch this
+
+Audit doc §5 verified only that planned emit-site code wouldn't read
+`config.*` attributes in ways that mirrored the v0.2.7 `config.api` vs
+`config.http_api` hotfix. The gate was effective for what it audited and
+defended against a real class of bug. But the gate's scope was narrower
+than the implicit assumption "if the gate is closed, ALERT is ready to
+ship." Schema shape between bot and dashboard was not on the §5 audit
+checklist, and the §5.2 row for ALERT explicitly deferred shape questions
+("ALERT per BOT_CONTRACT") without resolving which side's contract held
+authority on disagreement.
+
+### Resolution
+
+Dashboard schemas are canonical. Bot moves. In this batch:
+
+- `api/schemas.py`: `WsTickPayload`, `WsFillPayload`, `WsAlertPayload`
+  deleted. `WsTick.payload: PriceTick`, `WsFill.payload: FillRecord`,
+  `WsAlert.payload: AlertItem`.
+- `AlertItem` reshaped: `id: str`, `time: str` (replacing `ts: int`),
+  `severity: Literal["info","warning","critical"]` (dropped `"error"`),
+  `source: str` added, `message: str` retained. `acknowledged` and
+  `strategy` fields dropped after grep confirmed no non-test consumers.
+- `DashboardSnapshot.recentAlerts: Optional[list[AlertItem]]` continues
+  to reference the (now-corrected) `AlertItem`. The REST snapshot's
+  `recentAlerts` field shape is incidentally fixed by this reconciliation.
+  The `api/routes_rest.py` blob `8ae836cf` remains frozen; only payload
+  schemas in `api/schemas.py` evolved. The "frozen REST contract" anchor
+  was about routes, not schemas.
+
+### Open items deferred to other batches
+
+- **WsStrategyUpdate envelope drift.** `WsStrategyUpdatePayload.strategies`
+  + `.strategyConfigs` does not match dashboard's
+  `StrategyUpdateSchema = z.object({ strategyId, updates })`. Will be
+  reconciled in the same-commit-as-wire-up STRATEGY_UPDATE step batch.
+- **WsFill envelope drift.** This batch flattens `WsFill.payload` to
+  `FillRecord` (matching dashboard), but does NOT verify `FillRecord`
+  field-by-field against dashboard `FillSchema`. That verification is
+  part of the FILL step batch.
+- **`AlertItem.acknowledged` / `.strategy` fields.** Dropped from the bot
+  schema. If a future bot-side workflow needs alert-acknowledgement
+  tracking or per-strategy alert attribution, dashboard schemas would
+  need to gain those fields first; bot follows.
+- **Schema-contract regression test.** A bot-side test asserting
+  `api/schemas.py` envelope shapes match a frozen snapshot of dashboard
+  `WsMessageSchema` would have caught this drift. Not added in this
+  batch — queued as housekeeping.
+
+### Process note
+
+The §5 audit gate worked. The bug it didn't catch wasn't in its scope.
+Future audit docs that gate cross-repo emit sites should add a "schema
+shape verification" section parallel to the `config.*` access verification:
+list every WS message type, name the canonical-side schema by file:line,
+verify field-by-field equivalence between bot and dashboard before
+declaring the gate closed.

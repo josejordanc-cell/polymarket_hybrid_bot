@@ -76,6 +76,12 @@ async def run(
     # broadcast() calls from the fill / alert / strategy-update paths.
     emitter = Emitter()
     app[EMITTER_KEY] = emitter
+
+    # D.2.4 step 1: make the Emitter reachable from utils/alerts.send_alert
+    # via the module-level singleton in utils/alerts. See d24-emit-site-audit.md §10.
+    from utils.alerts import set_emitter
+    set_emitter(emitter)
+
     app[CONFIG_KEY] = config
     app.router.add_get("/ws", ws_handler)
 

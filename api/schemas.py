@@ -198,14 +198,13 @@ class BotLogEntry(BaseModel):
 
 
 class AlertItem(BaseModel):
-    """Mirrors AlertItemSchema."""
+    """Mirrors dashboard AlertItemSchema. See docs/audit/d24-emit-site-audit.md §10."""
 
     id: str
-    ts: int  # epoch ms
-    severity: Literal["info", "warning", "error", "critical"]
+    time: str  # "HH:MM:SS" per dashboard handoff §6.3
+    severity: Literal["info", "warning", "critical"]
+    source: str
     message: str
-    strategy: Optional[StrategyId] = None
-    acknowledged: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -376,16 +375,11 @@ class PriceTick(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class WsTickPayload(BaseModel):
-    tick: PriceTick
-
-
-class WsFillPayload(BaseModel):
-    fill: FillRecord
-
-
-class WsAlertPayload(BaseModel):
-    alert: AlertItem
+# Payload wrapper classes for TICK/FILL/ALERT were flattened in D.2.4
+# step 1 to match the dashboard's WsMessageSchema discriminated union
+# in components/dashboard/schemas.ts:215. See d24-emit-site-audit.md §10.
+# WsStrategyUpdatePayload is retained; STRATEGY_UPDATE step will
+# reconcile its shape separately.
 
 
 class WsStrategyUpdatePayload(BaseModel):
@@ -395,17 +389,17 @@ class WsStrategyUpdatePayload(BaseModel):
 
 class WsTick(BaseModel):
     type: Literal["TICK"] = "TICK"
-    payload: WsTickPayload
+    payload: PriceTick
 
 
 class WsFill(BaseModel):
     type: Literal["FILL"] = "FILL"
-    payload: WsFillPayload
+    payload: FillRecord
 
 
 class WsAlert(BaseModel):
     type: Literal["ALERT"] = "ALERT"
-    payload: WsAlertPayload
+    payload: AlertItem
 
 
 class WsStrategyUpdate(BaseModel):
