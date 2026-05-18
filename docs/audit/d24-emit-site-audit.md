@@ -149,7 +149,7 @@ Per §4. Follow-up commit, not D.2.4-blocking. Migrate `tests/api/conftest.py` `
 
 ## 9. Step landings (filled as each step lands)
 
-### 9.1 ALERT step — landed at SHA `<COMMIT-SHA-AFTER-COMMIT>`
+### 9.1 ALERT step — landed at SHA `4f63d9b`
 
 Wire-up + envelope reconciliation per §10. No `config.*` access introduced
 (audit §5.2 verified N/A). Emitter handoff: module-level singleton
