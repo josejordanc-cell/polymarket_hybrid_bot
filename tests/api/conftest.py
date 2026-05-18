@@ -39,25 +39,23 @@ def bot_state() -> BotState:
     state.recent_fills.append(
         FillRecord(
             id="fill-001",
-            marketId="MKT-BTC-001",
-            outcome="YES",
+            time="16:00:00",
+            symbol="MKT-BTC-001",
             action="UP",
-            quantity=10.0,
             price=0.65,
+            size=10.0,
             strategy="strategy1",
-            ts=1700000000000,
         )
     )
     state.recent_fills.append(
         FillRecord(
             id="fill-002",
-            marketId="MKT-ETH-001",
-            outcome="NO",
+            time="16:01:00",
+            symbol="MKT-ETH-001",
             action="DOWN",
-            quantity=5.0,
             price=0.42,
+            size=5.0,
             strategy="strategy2",
-            ts=1700000060000,
         )
     )
     return state

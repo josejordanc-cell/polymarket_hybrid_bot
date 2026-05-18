@@ -266,3 +266,130 @@ shape verification" section parallel to the `config.*` access verification:
 list every WS message type, name the canonical-side schema by file:line,
 verify field-by-field equivalence between bot and dashboard before
 declaring the gate closed.
+
+### 9.2 FILL step — landed at SHA `<COMMIT-SHA-AFTER-COMMIT>`
+
+Wire-up + envelope reconciliation + Level-1 `pnl`-nullable adoption per
+§10 (FILL drift narrative). Emit site is `main.py:_exec_and_record`,
+inserted as a fourth peer line after `notify_fill_metrics` and before
+`record_fill_return_for_correlation` (matching the established
+fire-and-forget-side-effect pattern at that scope). Emitter handoff
+via module-level singleton in `utils/fills.py`, mirroring
+`utils/alerts.py`.
+
+No `config.*` access introduced (audit §5.1 verified N/A). RiskManager
+constructor signature unchanged: the emit site lives in `main.py`, not
+inside `risk.on_fill`, so no plumbing changes to risk_manager.py.
+
+Five pre-existing `FillRecord(...)` construction sites in
+`tests/api/conftest.py` and `tests/api/test_schemas.py` updated in the
+same commit to the new shape. New regression test
+`tests/api/test_schema_contract.py` covers ALERT + FILL envelope drift;
+STRATEGY_UPDATE coverage deferred to step 3.
+
+---
+
+## 10 (continued). FILL step — drift discovery + Level-1 resolution
+
+### Background
+
+The §5.1 audit row for FILL named two candidate emit sites
+(`main.py:520-540` post-executor-result, vs `risk_manager.on_fill`) but
+did not decide between them. Phase 0 investigation at the start of the
+FILL batch resolved the ambiguity: `notify_fill_metrics` already fires
+at `main.py:516-527` as a peer to `risk.on_fill`, not from inside it.
+The "Call once per fill after RiskManager.on_fill" comment in
+`observability/metrics_exporter.py` describes *temporal ordering*
+(after `risk.on_fill` returns), not *call site*. FILL broadcast lands as
+the fourth peer at that same scope.
+
+### Schema drift (worse than ALERT)
+
+Bot `FillRecord` and dashboard `FillSchema` barely overlapped:
+
+| Bot `FillRecord` (pre-batch) | Dashboard `FillSchema` (canonical) | Resolution |
+|---|---|---|
+| `id` | `id` | match |
+| `marketId` | — | dropped (0 non-test consumers) |
+| `outcome: "YES"\|"NO"` | — | dropped (0 non-test consumers) |
+| `action: "UP"\|"DOWN"` | `action: enum("UP","DOWN")` | match |
+| `quantity: float` | `size: number` | renamed quantity → size |
+| `price: float` | `price: number` | match |
+| `strategy: StrategyId` | `strategy: string` | match |
+| `ts: int` (epoch ms) | `time: string` (HH:MM:SS) | type+name change, same as ALERT |
+| `fees: Optional[float]` | — | dropped (0 non-test consumers) |
+| `pnl: Optional[float]` | `pnl: number` | **Level-1 escalation** (see below) |
+| — | `symbol: string` | added; display-only mapping to `market_id[:12]` |
+| — | `status: enum("filled","pending")` | added; hardcoded "filled" at emit site by guard-construction |
+
+Three bot-side fields dropped (`marketId`, `outcome`, `fees`) had zero
+non-test consumers verified by grep, matching the ALERT precedent for
+field-drops. Three new fields added with documented defaults: `symbol`
+is `market_id[:12]` (consistent with how the bot already logs market
+IDs at `main.py:502`), `status` is hardcoded `"filled"` (guard at
+`main.py:516` only emits when `result.accepted and result.filled_size
+> 0`), `pnl` see below.
+
+### The `pnl` Level-1 escalation
+
+Dashboard `FillSchema.pnl: z.number()` requires the bot to know
+realized pnl at fill time. The bot does NOT know realized pnl at fill
+time — pnl is computed downstream in equity reconciliation, not in
+`_exec_and_record`. Three options were considered:
+
+1. **Default `pnl=0.0` at emit.** Rejected as actively misleading: the
+   dashboard would render "$0.00 pnl" for every real-time fill,
+   indistinguishable from a real $0 pnl trade. Worse than "no
+   information": it presents wrong information as if it were correct.
+
+2. **Compute `pnl` inline at the emit site from `fill_price ×
+   filled_size - cost_basis`.** Rejected because `cost_basis` (entry
+   price for the position) isn't tracked in `TradeResult` and isn't
+   trivially derivable. Computing nonsense from incomplete inputs.
+
+3. **Bot emits `pnl=None`, dashboard schema becomes
+   `pnl: z.number().nullable()`, dashboard renders "—" or "(pending)"
+   for null.** Adopted. This is the honest representation of "we don't
+   know yet; downstream will know."
+
+This is the first place in the bot/dashboard reconciliation where the
+"dashboard canonical" rule did not hold. The rule's justification is
+that the dashboard schemas have received careful review and represent
+the contract a human would consciously design. For `pnl` at fill time,
+the dashboard schema is wrong: it asserts knowledge the bot
+genuinely does not possess. Adopting the dashboard schema here would
+force the bot to lie (default to 0.0 or compute nonsense). The bot
+keeps `Optional[float]` and emits `None`; the dashboard side gains
+`.nullable()` in a paired commit.
+
+This pattern — bot field's optionality reflecting a real epistemic gap,
+dashboard schema needing to accommodate — is generalisable. Future
+batches should default to "dashboard canonical" but escalate when the
+schema asserts information the bot can't produce.
+
+### Schema-contract regression test landed
+
+`tests/api/test_schema_contract.py` (new) snapshots dashboard field
+expectations for `AlertItem` and `FillRecord` plus envelope-flatness
+invariants for `WsAlert` and `WsFill`. The test was scoped narrower
+than ratified — field-set comparison rather than full JSON-schema
+output comparison — to avoid brittle exact-match against pydantic's
+output format. The drift class this guards against is field
+addition/deletion and envelope re-nesting; full type compatibility is
+verified by the pydantic-validate round-trip tests in
+`tests/utils/test_fills.py` and `tests/utils/test_alerts.py`.
+
+STRATEGY_UPDATE coverage will be added to this file when
+`WsStrategyUpdatePayload` is reconciled.
+
+### Dashboard-side companion changes (separate commit)
+
+- `components/dashboard/schemas.ts:73`: `pnl: z.number()` →
+  `pnl: z.number().nullable()`
+- Fills-list render component: show "—" (em-dash) for null pnl
+
+### Process note (added to the ALERT process note)
+
+"Dashboard canonical" is a working principle, not an inviolable rule.
+Escalate to Level-1 review when the dashboard schema asserts
+information the bot does not possess at the emit site.

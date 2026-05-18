@@ -143,14 +143,12 @@ def test_openposition_invalid_outcome() -> None:
 def test_fillrecord_round_trip() -> None:
     fill = FillRecord(
         id="fill-999",
-        marketId="MKT-XYZ-001",
-        outcome="NO",
+        time="16:30:00",
+        symbol="MKT-XYZ-001",
         action="DOWN",
-        quantity=20.0,
         price=0.38,
+        size=20.0,
         strategy="strategy3",
-        ts=1700001000000,
-        fees=0.05,
         pnl=-1.2,
     )
     data = fill.model_dump(mode="json")
@@ -158,26 +156,26 @@ def test_fillrecord_round_trip() -> None:
     assert fill2.id == fill.id
     assert fill2.action == fill.action
     assert fill2.strategy == fill.strategy
-    assert fill2.fees == fill.fees
     assert fill2.pnl == fill.pnl
+    # status defaults to "filled" per dashboard contract; verify it survives round-trip.
+    assert fill2.status == "filled"
 
 
 def test_fillrecord_optional_fields_none() -> None:
+    """pnl is Optional[float] per the dashboard-canonical-broke-here decision
+    documented in docs/audit/d24-emit-site-audit.md §10. Verify that
+    constructing with pnl=None succeeds and survives round-trip."""
     fill = FillRecord(
         id="fill-000",
-        marketId="MKT-BTC-001",
-        outcome="YES",
+        time="16:31:00",
+        symbol="MKT-BTC-001",
         action="UP",
-        quantity=5.0,
         price=0.70,
+        size=5.0,
         strategy="strategy1",
-        ts=1700002000000,
-        fees=None,
         pnl=None,
     )
     data = fill.model_dump()
-    assert "fees" in data
-    assert data["fees"] is None
     assert "pnl" in data
     assert data["pnl"] is None
 
@@ -319,13 +317,12 @@ def test_dashboardsnapshot_full_round_trip() -> None:
     )
     fill = FillRecord(
         id="fill-rt-01",
-        marketId="MKT-BTC-001",
-        outcome="YES",
+        time="16:32:00",
+        symbol="MKT-BTC-001",
         action="UP",
-        quantity=10.0,
         price=0.65,
+        size=10.0,
         strategy="strategy1",
-        ts=1700000000000,
     )
     snap = DashboardSnapshot(
         globalStats=gs,

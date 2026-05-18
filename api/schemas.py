@@ -97,18 +97,33 @@ class OpenPosition(BaseModel):
 
 
 class FillRecord(BaseModel):
-    """Mirrors FillSchema.  action is UP/DOWN (net market direction)."""
+    """Mirrors dashboard FillSchema. See docs/audit/d24-emit-site-audit.md §10
+    (FILL drift discovery + reconciliation). action is UP/DOWN (net market direction).
+
+    Dropped fields from prior shape: ``marketId``, ``outcome: Literal["YES","NO"]``,
+    ``fees``. Zero non-test consumers verified pre-batch.
+
+    Renamed: ``quantity`` -> ``size`` (dashboard naming), ``ts: int`` (epoch ms)
+    -> ``time: str`` ("HH:MM:SS" per dashboard handoff §6.3).
+
+    Added: ``symbol`` (display-only mapping to ``market_id[:12]`` at emit time),
+    ``status: Literal["filled","pending"]`` (hardcoded "filled" at the main.py
+    emit site by guard-construction).
+
+    ``pnl`` remains ``Optional[float]``: the bot does NOT know realized pnl at
+    fill time. Dashboard ``FillSchema.pnl`` was updated to nullable in a paired
+    dashboard commit. See d24-emit-site-audit.md §10 for the rationale on
+    why this is the first place "dashboard canonical" did not hold."""
 
     id: str
-    marketId: str
-    outcome: Literal["YES", "NO"]
+    time: str  # "HH:MM:SS" per dashboard handoff §6.3
+    symbol: str  # display-only mapping; see docstring
     action: Literal["UP", "DOWN"]
-    quantity: float
     price: float
-    strategy: StrategyId
-    ts: int  # epoch ms
-    fees: Optional[float] = None
+    size: float
     pnl: Optional[float] = None
+    status: Literal["filled", "pending"] = "filled"
+    strategy: StrategyId
 
 
 # ---------------------------------------------------------------------------

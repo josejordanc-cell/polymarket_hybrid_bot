@@ -319,6 +319,7 @@ async def run_bot(mode: str) -> None:
             notify_fill_metrics,
             set_metrics_exporter,
         )
+        from utils.fills import broadcast_fill
 
         metrics = MetricsExporter(
             experiment_id=config.experiment_id,
@@ -328,6 +329,7 @@ async def run_bot(mode: str) -> None:
         set_metrics_exporter(metrics)
     else:
         from observability.metrics_exporter import notify_fill_metrics, set_metrics_exporter
+        from utils.fills import broadcast_fill
 
         set_metrics_exporter(None)
 
@@ -525,6 +527,21 @@ async def run_bot(mode: str) -> None:
                             intent.tif,
                             result.fill_price,
                             result.filled_size,
+                        )
+                        # D.2.4 step 2: broadcast FILL to dashboard subscribers.
+                        # Fire-and-forget; never raises. See utils/fills.py and
+                        # docs/audit/d24-emit-site-audit.md §10.
+                        await broadcast_fill(
+                            market_id=intent.market_id,
+                            action=("UP" if intent.outcome == "YES" else "DOWN"),
+                            price=float(
+                                result.fill_price
+                                if result.fill_price is not None
+                                else intent.price_rounded()
+                            ),
+                            size=float(result.filled_size),
+                            strategy=intent.strategy,
+                            pnl=None,
                         )
                         record_fill_return_for_correlation(
                             risk,
