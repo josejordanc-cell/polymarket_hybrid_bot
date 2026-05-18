@@ -158,7 +158,7 @@ Wire-up + envelope reconciliation per §10. No `config.*` access introduced
 
 ### 9.2 FILL step — *not yet landed*
 
-### 9.3 STRATEGY_UPDATE step — landed at SHA `<TBD>`
+### 9.3 STRATEGY_UPDATE step — landed at SHA `d1d2276`
 
 Wire-up + envelope reconciliation per §10 STRATEGY_UPDATE narrative
 (appended at end of this file). Emit site is
