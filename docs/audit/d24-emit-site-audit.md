@@ -267,7 +267,7 @@ list every WS message type, name the canonical-side schema by file:line,
 verify field-by-field equivalence between bot and dashboard before
 declaring the gate closed.
 
-### 9.2 FILL step — landed at SHA `<COMMIT-SHA-AFTER-COMMIT>`
+### 9.2 FILL step — landed at SHA `a98f3ea`
 
 Wire-up + envelope reconciliation + Level-1 `pnl`-nullable adoption per
 §10 (FILL drift narrative). Emit site is `main.py:_exec_and_record`,
