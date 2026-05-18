@@ -58,17 +58,31 @@ class GlobalStats(BaseModel):
 
 
 class StrategyCardData(BaseModel):
-    """Mirrors StrategyCardDataSchema."""
+    """Mirrors dashboard StrategyCardDataSchema.
+
+    Reshaped in D.2.4 step 3 (STRATEGY_UPDATE) to match dashboard
+    components/dashboard/schemas.ts:44. Eight fields are nullable
+    because the bot does not currently track per-strategy telemetry
+    (OQ-3 stub state; see BotState in api/state.py). sparkline defaults
+    to [] rather than null because empty time-series is the natural
+    representation of "no data points yet". See
+    docs/audit/d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift +
+    Level-1 escalation).
+    """
 
     id: StrategyId
     name: str
-    status: Literal["active", "paused", "error"]
-    pnl: float
-    pnlPct: float
-    trades: int
-    winRate: float
+    status: Literal["live", "paused"]
+    pnlToday: Optional[float] = None
+    pnlMonth: Optional[float] = None
+    winRate: Optional[float] = None
+    tradesToday: Optional[int] = None
+    avgHoldMinutes: Optional[float] = None
+    lastSignal: Optional[Literal["LONG", "SHORT", "EXIT"]] = None
     # OQ-7 sequence note: sequenceNumber deferred to v1.1+
     pipelineStep: int  # 1=intra_arbitrage, 2=momentum_latency, 3=market_maker
+    exposure: Optional[float] = None
+    sparkline: list[float] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -390,16 +404,40 @@ class PriceTick(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-# Payload wrapper classes for TICK/FILL/ALERT were flattened in D.2.4
-# step 1 to match the dashboard's WsMessageSchema discriminated union
-# in components/dashboard/schemas.ts:215. See d24-emit-site-audit.md §10.
-# WsStrategyUpdatePayload is retained; STRATEGY_UPDATE step will
-# reconcile its shape separately.
+# Payload wrapper classes for TICK/FILL/ALERT/STRATEGY_UPDATE were
+# flattened in D.2.4 (steps 1-3) to match the dashboard's WsMessageSchema
+# discriminated union in components/dashboard/schemas.ts:215. See
+# d24-emit-site-audit.md §10.
 
 
-class WsStrategyUpdatePayload(BaseModel):
-    strategies: list[StrategyCardData]
-    strategyConfigs: Optional[list[StrategyConfig]] = None
+class StrategyUpdateFields(BaseModel):
+    """The four fields the bot can actually mutate via
+    StrategyConfigPatch. All Optional; only fields the patch changed
+    are emitted (model_dump(exclude_none=True)).
+
+    Defined before StrategyUpdate so StrategyUpdate.updates can reference
+    it without a forward-ref (pydantic v2 forward-refs require
+    model_rebuild() and that's an avoidable extra step).
+    """
+
+    enabled: Optional[bool] = None
+    maxPositionSize: Optional[float] = None
+    riskBudget: Optional[float] = None
+    activePairs: Optional[str] = None
+
+
+class StrategyUpdate(BaseModel):
+    """STRATEGY_UPDATE payload — intentionally narrower than dashboard
+    StrategyCardUpdatesSchema. Dashboard schema is a partial-of-all-card-
+    fields (permissive); bot can only emit changes to the four
+    StrategyRuntimeConfig fields. Dashboard accepts everything bot emits
+    plus more it doesn't need to receive — this asymmetry is correct.
+    See d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift, bot-narrower
+    paragraph).
+    """
+
+    strategyId: StrategyId
+    updates: StrategyUpdateFields
 
 
 class WsTick(BaseModel):
@@ -419,7 +457,7 @@ class WsAlert(BaseModel):
 
 class WsStrategyUpdate(BaseModel):
     type: Literal["STRATEGY_UPDATE"] = "STRATEGY_UPDATE"
-    payload: WsStrategyUpdatePayload
+    payload: StrategyUpdate
 
 
 class WsPong(BaseModel):

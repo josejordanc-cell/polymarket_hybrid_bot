@@ -158,7 +158,37 @@ Wire-up + envelope reconciliation per §10. No `config.*` access introduced
 
 ### 9.2 FILL step — *not yet landed*
 
-### 9.3 STRATEGY_UPDATE step — *not yet landed*
+### 9.3 STRATEGY_UPDATE step — landed at SHA `<TBD>`
+
+Wire-up + envelope reconciliation per §10 STRATEGY_UPDATE narrative
+(appended at end of this file). Emit site is
+`api/state.py:BotState.apply_strategy_patch`, inserted immediately
+after the in-place mutation of `self.strategy_configs[patch.id]` —
+the single central choke-point the audit recommended (§5.3). Emitter
+handoff via module-level singleton in `utils/strategy_updates.py`,
+mirroring `utils/alerts.py` and `utils/fills.py`.
+
+Structural twist: `apply_strategy_patch` is sync but
+`Emitter.broadcast` is async, so `broadcast_strategy_update` is a sync
+function that schedules the async broadcast via
+`asyncio.get_running_loop().create_task(...)`. When no loop is running
+(sync test context, no HTTP server), the broadcast no-ops cleanly via
+`try/except RuntimeError` — that's the correct semantics, not a bug.
+See `utils/strategy_updates.broadcast_strategy_update` docstring for
+the full rationale.
+
+No `config.*` access introduced (audit §5.3 verified N/A). The four
+fields that can be patched (`enabled`, `maxPositionSize`, `riskBudget`,
+`activePairs`) all live on `state.strategy_configs[<id>]` (the runtime
+surface), not `config.strategy.*` (the static-defaults surface) — the
+§6.0 "two strategy surfaces" warning is respected.
+
+Schema-contract regression test `tests/api/test_schema_contract.py`
+extended with three new STRATEGY_UPDATE-targeted tests + a hardcoded
+snapshot of the dashboard's `StrategyCardUpdatesSchema` field-set.
+New unit-test file `tests/utils/test_strategy_updates.py` exercises
+the broadcast helper with 5 scenarios (registered/unregistered, sync-
+context-no-loop, multi-call, pydantic round-trip).
 
 ---
 
@@ -379,8 +409,11 @@ addition/deletion and envelope re-nesting; full type compatibility is
 verified by the pydantic-validate round-trip tests in
 `tests/utils/test_fills.py` and `tests/utils/test_alerts.py`.
 
-STRATEGY_UPDATE coverage will be added to this file when
-`WsStrategyUpdatePayload` is reconciled.
+STRATEGY_UPDATE coverage was added in step 3 (see appended §10
+STRATEGY_UPDATE narrative at end of this file) with field-set snapshot
+of `StrategyUpdateFields` + envelope-flatness invariant for
+`WsStrategyUpdate`. The wrapper class `WsStrategyUpdatePayload` was
+dropped at the same time, parallelling the ALERT/FILL flattening.
 
 ### Dashboard-side companion changes (separate commit)
 
@@ -393,3 +426,198 @@ STRATEGY_UPDATE coverage will be added to this file when
 "Dashboard canonical" is a working principle, not an inviolable rule.
 Escalate to Level-1 review when the dashboard schema asserts
 information the bot does not possess at the emit site.
+
+
+---
+
+## 10 (continued, again). STRATEGY_UPDATE step — drift + bot-narrower escalation
+
+### Background
+
+The §5.3 audit row for STRATEGY_UPDATE named exactly one emit-site
+candidate: `api/state.py:BotState.apply_strategy_patch`, the single
+choke-point where strategy runtime config mutates. No ambiguity to
+resolve (unlike FILL's two-candidate situation). What was *not*
+foreseen by the audit was the depth of the field-name mismatch
+between the bot's STRATEGY_UPDATE payload and the dashboard's
+`StrategyUpdateSchema`. The ALERT batch had partial overlap and a
+clean rename path; the FILL batch had wider drift plus the `pnl`
+Level-1 escalation; STRATEGY_UPDATE has effectively **no overlap** at
+the field-name level, and the resolution required a different kind of
+escalation than FILL's.
+
+### Schema drift — disjoint at the field-name level
+
+The bot's pre-batch `WsStrategyUpdatePayload` was a thin wrapper
+around `StrategyRuntimeConfig` deltas. The four fields it carries are
+exactly the four fields a `StrategyConfigPatch` can mutate:
+`enabled`, `maxPositionSize`, `riskBudget`, `activePairs`.
+
+The dashboard's `StrategyUpdateSchema` is a different shape entirely.
+It's defined as `StrategyCardDataSchema.omit({id: true}).partial()` —
+i.e. a partial-of-all-card-data-fields. The card data schema lists
+display-time fields the dashboard renders in the strategy card grid:
+`name`, `status`, `pnlToday`, `pnlMonth`, `winRate`, `tradesToday`,
+`avgHoldMinutes`, `lastSignal`, `pipelineStep`, `exposure`, `sparkline`.
+
+| Bot `StrategyUpdateFields` (post-batch) | Dashboard `StrategyCardUpdatesSchema` | Overlap |
+|---|---|---|
+| `enabled: Optional[bool]` | — | no field-name overlap |
+| `maxPositionSize: Optional[float]` | — | no field-name overlap |
+| `riskBudget: Optional[float]` | — | no field-name overlap |
+| `activePairs: Optional[str]` | — | no field-name overlap |
+| — | `name`, `status`, `pnlToday`, `pnlMonth`, `winRate`, `tradesToday`, `avgHoldMinutes`, `lastSignal`, `pipelineStep`, `exposure`, `sparkline` | — |
+
+Two genuinely different things are competing for the same WsMessage
+discriminant. The bot is emitting *runtime-config patches* (what
+changed in the persistent config). The dashboard is consuming
+*card-data partials* (what to repaint in which cell). Same envelope
+type, different semantic content.
+
+### Resolution — "permissive superset", but semantic not syntactic
+
+Three options were considered for the bot side:
+
+1. **Bot widens to match the dashboard card-data partial.** Rejected.
+   The bot does not have `pnlToday`/`pnlMonth`/`winRate`/etc to emit
+   from `apply_strategy_patch`; those are computed downstream in the
+   strategy-loop's metrics pipeline. Emitting them from
+   `apply_strategy_patch` would be inventing fields the bot does not
+   know — the same trap §10's FILL `pnl` escalation already named.
+
+2. **Bot keeps narrow, dashboard narrows too.** Rejected. The
+   dashboard *does* receive card-data partials at runtime (from the
+   metrics pipeline, eventually). Narrowing the dashboard schema to
+   match the bot's four-field patch would break the legitimate
+   card-data-partial wire path.
+
+3. **Bot keeps narrow (four runtime-config fields), dashboard keeps
+   wide (eleven card-data fields), discriminant union accepts both
+   shapes vacuously via zod's partial-with-unknown-keys behaviour.**
+   Adopted. The bot emits fields the dashboard treats as unknown via
+   zod's lenient parsing on `.partial()` schemas (unknown keys are
+   dropped, not rejected). The dashboard accepts a payload it
+   doesn't render any card cells from — that's fine, because the
+   `applyWsMessage` reducer at `lib/applyWsMessage.ts:69-72`
+   does a per-key delta-merge and simply skips bot-supplied keys it
+   doesn't have card cells for.
+
+This is a different shape of escalation than the FILL `pnl` case. FILL
+was "bot field's optionality reflects a real epistemic gap"; STRATEGY_UPDATE
+is **"bot's field-set and dashboard's field-set are intentionally
+disjoint at the field-name level; the wire compatibility is
+*semantic* rather than *syntactic*."** The schema-contract regression
+test (`tests/api/test_schema_contract.py`) documents this asymmetry
+explicitly and snapshots the bot's narrow four-field shape positively
+rather than asserting a strict subset relation that doesn't actually
+hold at the field-name level.
+
+### The `sparkline` Gate 1 sub-decision
+
+`StrategyCardData.sparkline: list[float] = Field(default_factory=list)`.
+The natural alternative was `Optional[list[float]] = None` — but those
+two emit different wire values (`[]` vs `null`), and the dashboard's
+sparkline rendering branch treats them differently. An empty
+time-series (`[]`) means "no points yet, show the empty axis";
+`null` would mean "no series at all, hide the panel." For initial
+snapshot construction, the bot has *zero points* but the series
+*exists*, so `[]` is the honest signal. This is distinct from the
+nullable scalar telemetry fields (`pnlToday: Optional[float] = None`,
+etc.) where "we don't have a number yet" really is structurally
+different from "the number is zero." A list-typed time series with
+no points is not the same kind of absence — empty is the right
+default.
+
+### Sync-broadcast-from-sync-state-method engineering detail
+
+`apply_strategy_patch` is sync (mirrors `apply_patch` on
+`StrategyRuntimeConfig`, called from sync test setup as well as
+async HTTP route handlers). `Emitter.broadcast` is async. The bridge:
+`utils/strategy_updates.broadcast_strategy_update` is a SYNC function
+that probes for a running event loop with
+`asyncio.get_running_loop()`. If a loop is found, the broadcast is
+scheduled via `loop.create_task(em.broadcast(message))` —
+fire-and-forget, parallelling `utils/alerts.send_alert` semantics.
+If `RuntimeError` is raised (no running loop), the broadcast silently
+no-ops. That `RuntimeError`-as-control-flow is intentional: it lets
+sync state-mutation tests run without needing to spin up an event
+loop just to suppress the broadcast.
+
+The test surface locks this in: three sync `apply_patch` tests in
+`tests/api/test_state.py` install a mock emitter and assert
+`em.broadcast.await_count == 0` (no broadcast in sync test context),
+while a fourth `@pytest.mark.asyncio` test asserts
+`em.broadcast.await_count == 1` with the correct delta payload (sync
+state mutation triggers async broadcast when a loop IS available).
+
+### Schema-contract regression test extended
+
+`tests/api/test_schema_contract.py` (already established in step 2)
+gained three STRATEGY_UPDATE assertions:
+
+1. `test_strategy_update_fields_match_bot_runtime_patch_shape` —
+   positive snapshot of the bot's exact four-field set
+   (`enabled`/`maxPositionSize`/`riskBudget`/`activePairs`). Drift
+   trips this loudly.
+2. `test_strategy_update_payload_envelope_shape` — asserts
+   `StrategyUpdate` is the flat `{strategyId, updates: StrategyUpdateFields}`
+   shape and that the `updates` annotation is the direct class
+   reference (not a `ForwardRef`). pydantic v2 lazy forward-ref
+   resolution surfaced here during phase 1: classes are now ordered
+   so `StrategyUpdateFields` is defined *before* `StrategyUpdate` and
+   no `model_rebuild()` is needed.
+3. `test_ws_strategy_update_envelope_is_flat` — asserts
+   `WsStrategyUpdate.payload` is `StrategyUpdate` directly (no
+   re-introduced `WsStrategyUpdatePayload` wrapper class).
+
+A hardcoded snapshot of the dashboard's eleven-field
+`StrategyCardUpdatesSchema` is kept in the test as a comment-block
+constant `_DASH_STRATEGY_CARD_UPDATES_FIELDS`. The accompanying
+prose comment explicitly documents that the "permissive superset"
+claim is *not* asserted as a strict subset relation, because the
+relation is disjoint at the field-name level.
+
+### `StrategyCardData` was reshaped in the same batch
+
+`api/schemas.py:StrategyCardData` (the row shape carried by snapshot
+GET, separate from the WS update payload) was reshaped to match the
+dashboard's `StrategyCardDataSchema`:
+
+| Bot pre-batch | Bot post-batch | Dashboard |
+|---|---|---|
+| `status: Literal["active","paused"]` | `status: Literal["live","paused"]` | `enum("live","paused")` |
+| `pnl`, `pnlPct`, `trades` (floats) | dropped | dropped |
+| — | `pnlToday`, `pnlMonth`, `winRate`, `tradesToday`, `avgHoldMinutes`, `lastSignal`, `exposure` (all `Optional`) | matching nullable schema |
+| `pipelineStep: int` | `pipelineStep: int` | match |
+| — | `sparkline: list[float] = Field(default_factory=list)` | match (empty list, not null — see Gate 1 note above) |
+
+The snapshot construction at `api/routes_rest.py:76-84` was
+simplified: status is `"live" if cfg.enabled else "paused"`, and
+all telemetry defaults fall through pydantic field defaults. The
+existing test_routes_rest.py snapshot assertion was updated
+`"active"` → `"live"`.
+
+### Dashboard-side companion changes (separate commit)
+
+- `components/dashboard/schemas.ts:StrategyCardDataSchema.status` enum
+  is already `["live","paused"]` — no change needed (the drift was
+  bot-side).
+- `lib/applyWsMessage.ts:69-72` already delta-merges unknown keys
+  silently; no change needed.
+- A `dashboard/docs/audit/reviewer-pattern.md` ORCHESTRATOR-APPROVE
+  doc-only commit lands in parallel with the bot commit, recording
+  that the dashboard side is unaffected by the bot's narrow emission
+  (semantic superset confirmed by code-read, no runtime change).
+
+### Process note (added to the FILL process note)
+
+Two escalation patterns now exist:
+1. **FILL-style** — bot field's optionality reflects a real epistemic
+   gap (`pnl` at fill time); dashboard schema becomes `.nullable()`.
+2. **STRATEGY_UPDATE-style** — bot's emit-site domain (runtime-config
+   patches) and dashboard's consumer domain (card-data partials) are
+   genuinely different even though they share a WsMessage
+   discriminant. The wire compatibility is *semantic* (zod's
+   permissive partial parsing) rather than *syntactic* (overlapping
+   field names). Document the asymmetry, snapshot both sides
+   positively, do not assert a subset relation that doesn't hold.

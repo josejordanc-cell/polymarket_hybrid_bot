@@ -54,11 +54,10 @@ def test_strategycarddata_valid_ids() -> None:
         card = StrategyCardData(
             id=sid,
             name=f"Strategy {sid[-1]}",
-            status="active",
-            pnl=100.0,
-            pnlPct=1.0,
-            trades=10,
+            status="live",
+            pnlToday=100.0,
             winRate=0.6,
+            tradesToday=10,
             pipelineStep=1,
         )
         assert card.id == sid
@@ -69,11 +68,7 @@ def test_strategycarddata_invalid_id() -> None:
         StrategyCardData(
             id="strategy4",
             name="Unknown",
-            status="active",
-            pnl=0.0,
-            pnlPct=0.0,
-            trades=0,
-            winRate=0.0,
+            status="live",
             pipelineStep=4,
         )
 
@@ -84,10 +79,6 @@ def test_strategycarddata_invalid_status() -> None:
             id="strategy1",
             name="Intra Arb",
             status="running",
-            pnl=0.0,
-            pnlPct=0.0,
-            trades=0,
-            winRate=0.0,
             pipelineStep=1,
         )
 

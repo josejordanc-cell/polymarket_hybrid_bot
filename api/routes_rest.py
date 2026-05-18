@@ -76,11 +76,11 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
             StrategyCardData(
                 id=cfg.id,
                 name=strategy_name_map[cfg.id],
-                status="active" if cfg.enabled else "paused",
-                pnl=0.0,        # OQ-3 stub
-                pnlPct=0.0,     # OQ-3 stub
-                trades=0,       # OQ-3 stub
-                winRate=0.0,    # OQ-3 stub
+                status="live" if cfg.enabled else "paused",
+                # Telemetry fields default to None / [] until OQ-3 wiring
+                # tracks per-strategy pnl, trades, hold time, signal,
+                # exposure, and sparkline. See StrategyCardData docstring
+                # and d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift).
                 pipelineStep=pipeline_step_map[cfg.id],
             )
             for cfg in snap.strategy_configs.values()

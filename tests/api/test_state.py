@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from api.emit import Emitter
 from api.schemas import StrategyConfigPatch, StrategyRuntimeConfig
 from api.state import BotState
+from utils.strategy_updates import set_emitter as _set_strategy_updates_emitter
 
 # ---------------------------------------------------------------------------
 # Group 1 — BotState.create()
@@ -159,36 +161,107 @@ def test_shallow_copy_new_lock_and_preserved_maxlen() -> None:
 
 
 def test_apply_strategy_patch_fields_applied_defaults_preserved() -> None:
-    state = BotState.create(equity=0.0, day_start_equity=0.0)
-    patch = StrategyConfigPatch(id="strategy1", enabled=False, maxPositionSize=75.0)
-    state.apply_strategy_patch(patch)
+    # Install a mock emitter to verify that — even when registered —
+    # the broadcast does NOT fire when called from a sync context with
+    # no running event loop. This locks in the "sync-test = no broadcast"
+    # semantics of utils/strategy_updates (D.2.4 step 3).
+    em = MagicMock(spec=Emitter)
+    em.broadcast = AsyncMock()
+    _set_strategy_updates_emitter(em)
+    try:
+        state = BotState.create(equity=0.0, day_start_equity=0.0)
+        patch = StrategyConfigPatch(id="strategy1", enabled=False, maxPositionSize=75.0)
+        state.apply_strategy_patch(patch)
 
-    cfg = state.strategy_configs["strategy1"]
-    assert cfg.enabled is False
-    assert cfg.maxPositionSize == 75.0
-    assert cfg.riskBudget == 0.33      # default preserved
-    assert cfg.activePairs is None     # default preserved
+        cfg = state.strategy_configs["strategy1"]
+        assert cfg.enabled is False
+        assert cfg.maxPositionSize == 75.0
+        assert cfg.riskBudget == 0.33      # default preserved
+        assert cfg.activePairs is None     # default preserved
+
+        # No running event loop in this sync test → broadcast must no-op.
+        assert em.broadcast.await_count == 0
+    finally:
+        _set_strategy_updates_emitter(None)
 
 
 def test_apply_strategy_patch_returns_new_instance() -> None:
-    state = BotState.create(equity=0.0, day_start_equity=0.0)
-    original_cfg = state.strategy_configs["strategy1"]
-    patch = StrategyConfigPatch(id="strategy1", enabled=False)
-    state.apply_strategy_patch(patch)
+    em = MagicMock(spec=Emitter)
+    em.broadcast = AsyncMock()
+    _set_strategy_updates_emitter(em)
+    try:
+        state = BotState.create(equity=0.0, day_start_equity=0.0)
+        original_cfg = state.strategy_configs["strategy1"]
+        patch = StrategyConfigPatch(id="strategy1", enabled=False)
+        state.apply_strategy_patch(patch)
 
-    assert state.strategy_configs["strategy1"] is not original_cfg
+        assert state.strategy_configs["strategy1"] is not original_cfg
+        # No running event loop in this sync test → broadcast must no-op.
+        assert em.broadcast.await_count == 0
+    finally:
+        _set_strategy_updates_emitter(None)
 
 
 def test_apply_strategy_patch_sibling_strategies_untouched() -> None:
-    state = BotState.create(equity=0.0, day_start_equity=0.0)
-    patch = StrategyConfigPatch(id="strategy2", enabled=False, maxPositionSize=50.0)
-    state.apply_strategy_patch(patch)
+    em = MagicMock(spec=Emitter)
+    em.broadcast = AsyncMock()
+    _set_strategy_updates_emitter(em)
+    try:
+        state = BotState.create(equity=0.0, day_start_equity=0.0)
+        patch = StrategyConfigPatch(id="strategy2", enabled=False, maxPositionSize=50.0)
+        state.apply_strategy_patch(patch)
 
-    # strategy1 and strategy3 must be at defaults
-    assert state.strategy_configs["strategy1"].enabled is True
-    assert state.strategy_configs["strategy1"].maxPositionSize == 100.0
-    assert state.strategy_configs["strategy3"].enabled is True
-    assert state.strategy_configs["strategy3"].maxPositionSize == 100.0
+        # strategy1 and strategy3 must be at defaults
+        assert state.strategy_configs["strategy1"].enabled is True
+        assert state.strategy_configs["strategy1"].maxPositionSize == 100.0
+        assert state.strategy_configs["strategy3"].enabled is True
+        assert state.strategy_configs["strategy3"].maxPositionSize == 100.0
+        # No running event loop in this sync test → broadcast must no-op.
+        assert em.broadcast.await_count == 0
+    finally:
+        _set_strategy_updates_emitter(None)
+
+
+@pytest.mark.asyncio
+async def test_apply_strategy_patch_broadcasts_when_loop_running() -> None:
+    """When apply_strategy_patch is invoked from inside a running event
+    loop (i.e. the real HTTP server context) AND an Emitter has been
+    registered via utils.strategy_updates.set_emitter, the patch
+    triggers a STRATEGY_UPDATE broadcast carrying ONLY the non-None
+    patch fields (the per-strategy delta semantic the dashboard
+    expects).
+
+    See docs/audit/d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift,
+    bot-narrower paragraph) for the field-set rationale."""
+    import asyncio as _asyncio
+
+    em = MagicMock(spec=Emitter)
+    em.broadcast = AsyncMock()
+    _set_strategy_updates_emitter(em)
+    try:
+        state = BotState.create(equity=0.0, day_start_equity=0.0)
+        patch = StrategyConfigPatch(
+            id="strategy1", enabled=False, maxPositionSize=75.0,
+        )
+        state.apply_strategy_patch(patch)
+
+        # broadcast_strategy_update schedules the underlying async
+        # broadcast via loop.create_task; yield to let it run.
+        await _asyncio.sleep(0)
+
+        assert em.broadcast.await_count == 1
+        msg = em.broadcast.await_args.args[0]
+        assert msg["type"] == "STRATEGY_UPDATE"
+        payload = msg["payload"]
+        assert payload["strategyId"] == "strategy1"
+        # Only non-None patch fields appear; riskBudget/activePairs/id
+        # omitted because they weren't part of the patch input.
+        assert payload["updates"] == {
+            "enabled": False,
+            "maxPositionSize": 75.0,
+        }
+    finally:
+        _set_strategy_updates_emitter(None)
 
 
 # ---------------------------------------------------------------------------

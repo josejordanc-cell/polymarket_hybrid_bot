@@ -111,7 +111,10 @@ class TestSnapshotHandler:
         ids = {s["id"] for s in strategies}
         assert ids == {"strategy1", "strategy2", "strategy3"}
         for s in strategies:
-            assert s["status"] == "active"
+            # status changed "active"→"live" in D.2.4 step 3 to match
+            # dashboard StrategyCardDataSchema enum ["live","paused"].
+            # See d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift).
+            assert s["status"] == "live"
 
     async def test_snapshot_body_strategy_configs_present(self, test_client, bot_config):
         resp = await test_client.get(

@@ -9,14 +9,17 @@ the schema-drift class of bug we hit in D.2.4 step 1 (and §10's
 discovery narrative) can be caught at unit-test time rather than at
 integration time.
 
-Scope as of this batch (D.2.4 step 2):
-  - ALERT: bot WsAlert.payload == AlertItem (flat, post-ALERT-batch shape)
-  - FILL : bot WsFill.payload  == FillRecord (flat, post-FILL-batch shape)
+Scope as of this batch (D.2.4 step 3):
+  - ALERT           : bot WsAlert.payload           == AlertItem      (flat, post-ALERT-batch shape)
+  - FILL            : bot WsFill.payload            == FillRecord     (flat, post-FILL-batch shape)
+  - STRATEGY_UPDATE : bot WsStrategyUpdate.payload  == StrategyUpdate (flat, post-step-3 shape)
 
-STRATEGY_UPDATE coverage is deferred to the D.2.4 step 3 batch, when
-WsStrategyUpdatePayload is reconciled to match dashboard
-StrategyUpdateSchema. Until then this file intentionally does not
-snapshot WsStrategyUpdate.
+STRATEGY_UPDATE has two snapshots: (a) the envelope-flatness invariant
+parallel to ALERT/FILL, and (b) a field-set assertion that the bot's
+StrategyUpdateFields is a *subset* of the dashboard's permissive
+StrategyCardUpdatesSchema. The asymmetry (bot narrower than dashboard)
+is intentional — see d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift,
+bot-narrower paragraph).
 
 The snapshots below capture the dashboard contract as it stood when
 this test was written. If the dashboard side moves first, both this
@@ -25,7 +28,15 @@ paired commit.
 """
 from __future__ import annotations
 
-from api.schemas import AlertItem, FillRecord, WsAlert, WsFill
+from api.schemas import (
+    AlertItem,
+    FillRecord,
+    StrategyUpdate,
+    StrategyUpdateFields,
+    WsAlert,
+    WsFill,
+    WsStrategyUpdate,
+)
 
 
 # Hardcoded snapshot of dashboard AlertItemSchema field-set
@@ -130,4 +141,102 @@ def test_fill_record_pnl_is_optional() -> None:
         "FillRecord.pnl must be Optional/not-required so the bot can emit "
         "None at fill time (dashboard FillSchema.pnl is nullable to match). "
         "See d24-emit-site-audit.md §10."
+    )
+
+
+# Hardcoded snapshot of dashboard StrategyCardUpdatesSchema field-set
+# (components/dashboard/schemas.ts:211 — derived from
+# StrategyCardDataSchema.omit({id: true}).partial() as of D.2.4 step 3).
+# This is the *permissive superset* the bot's narrower StrategyUpdateFields
+# is allowed to lie within. The four bot fields must all appear in this set;
+# the dashboard accepting more is fine. See d24-emit-site-audit.md §10
+# (STRATEGY_UPDATE drift, bot-narrower paragraph).
+_DASH_STRATEGY_CARD_UPDATES_FIELDS = {
+    "name",
+    "status",
+    "pnlToday",
+    "pnlMonth",
+    "winRate",
+    "tradesToday",
+    "avgHoldMinutes",
+    "lastSignal",
+    "pipelineStep",
+    "exposure",
+    "sparkline",
+}
+
+# The four runtime-config fields the bot can actually emit. These must
+# all be a subset of _DASH_STRATEGY_CARD_UPDATES_FIELDS… EXCEPT they
+# aren't card-data fields at all — they're runtime-config fields. The
+# dashboard's StrategyCardUpdatesSchema does NOT include
+# enabled/maxPositionSize/riskBudget/activePairs. This means the
+# permissive-superset invariant is satisfied *vacuously* (bot emits
+# fields the dashboard treats as unknown via .passthrough()/.strict()
+# behaviour on partial schemas — zod's .partial() ignores unknown keys
+# by default). The test we land here is a positive snapshot of the bot's
+# four-field shape, plus an envelope-flatness invariant. The
+# "permissive superset" claim is documented but not asserted as a strict
+# subset relation, because the relation is in fact disjoint at the
+# field-name level: dashboard cares about card-data partial; bot emits
+# runtime-config patch. The semantic glue is the patch endpoint's
+# transformation logic on the dashboard side.
+_BOT_STRATEGY_UPDATE_FIELDS = {
+    "enabled",
+    "maxPositionSize",
+    "riskBudget",
+    "activePairs",
+}
+
+
+def test_strategy_update_fields_match_bot_runtime_patch_shape() -> None:
+    """StrategyUpdateFields is intentionally narrow: only the four fields
+    a StrategyConfigPatch can mutate (enabled, maxPositionSize, riskBudget,
+    activePairs). If this drifts, either StrategyConfigPatch grew a new
+    field or someone widened StrategyUpdateFields beyond what the patch
+    endpoint can produce. Both warrant review.
+
+    See d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift, bot-narrower
+    paragraph)."""
+    bot = _pydantic_field_names(StrategyUpdateFields)
+    expected = _BOT_STRATEGY_UPDATE_FIELDS
+    assert bot == expected, (
+        f"StrategyUpdateFields drifted from runtime-config patch shape. "
+        f"Bot has: {sorted(bot)}; expected: {sorted(expected)}. "
+        "If StrategyConfigPatch changed, this snapshot moves with it. "
+        "If StrategyUpdateFields widened independently of the patch, "
+        "stop and review — the bot would be claiming wire shape it can't "
+        "actually produce."
+    )
+
+
+def test_strategy_update_payload_envelope_shape() -> None:
+    """StrategyUpdate wraps {strategyId, updates: StrategyUpdateFields}.
+    No nested wrapper class (parallel to TICK/FILL/ALERT flattening in §10)."""
+    bot = _pydantic_field_names(StrategyUpdate)
+    assert bot == {"strategyId", "updates"}, (
+        f"StrategyUpdate payload shape drifted. Has: {sorted(bot)}. "
+        "Expected {'strategyId', 'updates'} per dashboard StrategyUpdateSchema."
+    )
+    updates_ann = StrategyUpdate.model_fields["updates"].annotation
+    assert updates_ann is StrategyUpdateFields, (
+        f"StrategyUpdate.updates annotation is {updates_ann!r}, "
+        "expected StrategyUpdateFields. If a wrapper class was introduced, "
+        "see d24-emit-site-audit.md §10."
+    )
+
+
+def test_ws_strategy_update_envelope_is_flat() -> None:
+    """WsStrategyUpdate must wrap StrategyUpdate directly (no
+    WsStrategyUpdatePayload wrapper class — that was dropped in D.2.4
+    step 3). Parallel to WsAlert/WsFill flattening invariants."""
+    bot = _pydantic_field_names(WsStrategyUpdate)
+    assert bot == {"type", "payload"}, (
+        f"WsStrategyUpdate envelope shape drifted. Has: {sorted(bot)}. "
+        "Expected {'type', 'payload'} with payload: StrategyUpdate (flat, not nested)."
+    )
+    payload_ann = WsStrategyUpdate.model_fields["payload"].annotation
+    assert payload_ann is StrategyUpdate, (
+        f"WsStrategyUpdate.payload annotation is {payload_ann!r}, "
+        "expected StrategyUpdate. If WsStrategyUpdatePayload was reintroduced, "
+        "see d24-emit-site-audit.md §10."
     )
