@@ -6,11 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Post-v0.2.4 security and hygiene fixes. All ten changes below are
-deployed to production (sim mode) and verified end-to-end. A v0.2.5
-release tag will be cut once the remaining Phase 1 / Phase 2 hardening
-items in `CURSOR_TASKS_v0.2.4.md` land, so v0.2.5 is a single coherent
-"post-tag hardening" release.
+Phase E.1 — strategy-id translation at the FILL wire boundary and BotState
+truthfulness for env-driven strategy flags. Branch `feat/intra-arb-dashboard-integration`,
++2 commits over main.
+
+### Added
+
+- **B.1 — FILL strategy-id translation** (commit `b3558ef`): `bot_to_dashboard()` /
+  `dashboard_to_bot()` helpers in `api/schemas.py`. FILL payload in `utils/fills.py:108`
+  now emits `strategy1`/`strategy2`/`strategy3` (dashboard contract ids) instead of the
+  internal strategy name. `smart_money_copy` raises `ValueError` at the wire boundary
+  (no contract id in v1.0). Docstring TODO added at `utils/strategy_updates.py` noting
+  the STRATEGY_UPDATE emit site is deferred to v0.2.9.
+- **B.2 — BotState reflects env strategy flags** (commit `6da5abb`): `BotState.from_risk`
+  now reads `config.strategy.momentum_enabled` and `config.strategy.market_maker_enabled`
+  so the snapshot `status` field for strategy cards reflects actual config truth, not a
+  hardcoded stub. `_build_snapshot` iterates an explicit tuple for deterministic card
+  order (reviewer Finding 6 fold-in). Reviewer Finding 6 from the Phase E.1 review.
+
+---
+
+## [0.2.5]
+
+Post-v0.2.4 security and hygiene fixes. All changes below are deployed to production
+(sim mode) and verified end-to-end.
 
 Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 (PR #18) is also under `### Changed`. Task **T12** (PR #19) is under `### Added`.
@@ -144,7 +163,7 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 ### Notes
 - Both changes are docs/meta-only. No behavioral change. No droplet redeploy required. Image digest unchanged.
 
-## v0.2.8 — 2026-05-18
+## [0.2.8] — 2026-05-18
 
 D.2.4 emit-site swarm (ALERT, FILL, STRATEGY_UPDATE batches). Two of three batches landed contract-conformant; STRATEGY_UPDATE wire-up was caught contract-nonconformant by post-implementation empirical verification and was reverted before the v0.2.8 tag moved to its final HEAD.
 
@@ -184,7 +203,7 @@ D.2.4 emit-site swarm (ALERT, FILL, STRATEGY_UPDATE batches). Two of three batch
 
 ---
 
-## v0.2.7 — 2026-05-13
+## [0.2.7] — 2026-05-13
 
 D.2.3 — WebSocket broadcaster module wired on top of v0.2.6's REST API. REST contract frozen since v0.2.6 (`api/schemas.py` blob `8ccdb63c`, `api/routes_rest.py` blob `8ae836cf`).
 

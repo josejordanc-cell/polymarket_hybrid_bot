@@ -183,10 +183,21 @@ class BotState:
         does not raise AttributeError.  This satisfies the requirement in
         SESSION-BRIEF §6 that MagicMock passes from_risk() cleanly.
 
-        The 'config' argument is accepted but not read here — it is
-        reserved for future use when per-strategy defaults may be loaded
-        from BotConfig.  Passing it explicitly keeps the call signature
-        stable across D.2.2/D.2.3/D.2.4.
+        Reads ``config.strategy.momentum_enabled`` and
+        ``config.strategy.market_maker_enabled`` to propagate the
+        environment-driven enable/disable state into the returned
+        ``strategy_configs``.  Uses a ``getattr`` chain so that a bare
+        ``MagicMock`` (without a fully-specified ``strategy`` attribute)
+        passes cleanly — the fallback is ``True``, preserving the
+        previous behaviour for tests that do not build a real BotConfig.
+        Real ``BotConfig`` instances always have ``cfg.strategy``
+        populated via the ``default_factory`` at
+        ``config/settings.py:281``, so the fallback only fires in tests
+        with bare mocks.
+
+        ``strategy1`` (intra_arbitrage) stays unconditionally enabled —
+        ``BotConfig.strategy`` has no ``intra_arb_enabled`` flag today;
+        the strategy's kill switch is upstream of BotConfig.
         """
         # Equity — risk.equity is a property on RiskManager
         try:
@@ -214,14 +225,29 @@ class BotState:
         except TypeError:
             raw_positions = {}
 
+        _strat_cfg = getattr(config, "strategy", None)
+        momentum_enabled = bool(
+            getattr(_strat_cfg, "momentum_enabled", True)
+        )
+        market_maker_enabled = bool(
+            getattr(_strat_cfg, "market_maker_enabled", True)
+        )
+
         return cls(
             equity=equity,
             day_start_equity=day_start_equity,
             open_positions=raw_positions,
             recent_fills=deque(maxlen=200),
             strategy_configs={
-                k: v.model_copy()
-                for k, v in _DEFAULT_STRATEGY_CONFIGS.items()
+                "strategy1": StrategyRuntimeConfig(id="strategy1", enabled=True),
+                "strategy2": StrategyRuntimeConfig(
+                    id="strategy2",
+                    enabled=momentum_enabled,
+                ),
+                "strategy3": StrategyRuntimeConfig(
+                    id="strategy3",
+                    enabled=market_maker_enabled,
+                ),
             },
             ws_subscribers=[],
             last_updated_at_ms=0,

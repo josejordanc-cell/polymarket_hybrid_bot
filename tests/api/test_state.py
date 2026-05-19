@@ -12,8 +12,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import pytest
+
 from api.schemas import StrategyConfigPatch, StrategyRuntimeConfig
 from api.state import BotState
+from config.settings import BotConfig
 
 # ---------------------------------------------------------------------------
 # Group 1 — BotState.create()
@@ -237,3 +240,70 @@ def test_write_lock_acquirable() -> None:
         assert result is True
     except RuntimeError as exc:
         pytest.skip(f"asyncio.run not available in this environment: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Group 7 — BotState.from_risk() reads config strategy flags (B.2)
+# ---------------------------------------------------------------------------
+
+
+def _make_risk_mock(equity: float = 5000.0) -> MagicMock:
+    """Build a minimal RiskManager mock for from_risk tests."""
+    risk = MagicMock()
+    risk.equity = equity
+    risk._state.day_start_equity = equity
+    risk._state.open_positions = {}
+    return risk
+
+
+def _make_config_mock(momentum_enabled: bool, market_maker_enabled: bool) -> MagicMock:
+    """Build a MagicMock(spec=BotConfig) with strategy flags set.
+
+    Uses configure_mock() to bypass spec enforcement on the nested
+    attribute, which is the approved pattern when spec=BotConfig does
+    not expose Pydantic instance fields in dir() (they are dynamic).
+    """
+    config = MagicMock(spec=BotConfig)
+    strat = MagicMock()
+    strat.momentum_enabled = momentum_enabled
+    strat.market_maker_enabled = market_maker_enabled
+    config.configure_mock(strategy=strat)
+    return config
+
+
+async def test_from_risk_both_flags_disabled() -> None:
+    """from_risk with momentum_enabled=False and market_maker_enabled=False
+    must yield strategy2.enabled=False, strategy3.enabled=False,
+    strategy1.enabled=True (unconditional)."""
+    state = BotState.from_risk(
+        _make_risk_mock(),
+        _make_config_mock(momentum_enabled=False, market_maker_enabled=False),
+    )
+    assert state.strategy_configs["strategy1"].enabled is True
+    assert state.strategy_configs["strategy2"].enabled is False
+    assert state.strategy_configs["strategy3"].enabled is False
+
+
+async def test_from_risk_both_flags_enabled() -> None:
+    """from_risk with momentum_enabled=True and market_maker_enabled=True
+    must yield all three strategies enabled=True."""
+    state = BotState.from_risk(
+        _make_risk_mock(),
+        _make_config_mock(momentum_enabled=True, market_maker_enabled=True),
+    )
+    assert state.strategy_configs["strategy1"].enabled is True
+    assert state.strategy_configs["strategy2"].enabled is True
+    assert state.strategy_configs["strategy3"].enabled is True
+
+
+async def test_from_risk_bare_mock_config_defaults_to_all_enabled() -> None:
+    """A bare MagicMock config (no spec, no strategy attribute set)
+    must fall back to enabled=True for all three strategies, matching
+    the pre-B.2 default behaviour."""
+    # Plain MagicMock — strategy attribute will be auto-created by MagicMock
+    # but .momentum_enabled on a MagicMock returns a truthy MagicMock,
+    # which bool() evaluates to True.
+    state = BotState.from_risk(_make_risk_mock(), MagicMock())
+    assert state.strategy_configs["strategy1"].enabled is True
+    assert state.strategy_configs["strategy2"].enabled is True
+    assert state.strategy_configs["strategy3"].enabled is True

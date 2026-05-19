@@ -18,7 +18,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from api.routes_rest import setup_routes
-from api.schemas import DashboardSnapshot, StopResponse
+from api.schemas import DashboardSnapshot, StopResponse, StrategyRuntimeConfig
 from api.state import BotState
 
 
@@ -381,3 +381,81 @@ class TestEmergencyStopHandler:
         assert isinstance(stopped_at, int)
         # Valid epoch-ms range: 2023-11-14 to ~2033-05-18
         assert 1_700_000_000_000 <= stopped_at <= 2_000_000_000_000
+
+
+# ---------------------------------------------------------------------------
+# TestSnapshotDisabledStrategies — B.2 regression tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def test_client_disabled_strategies(bot_config):
+    """TestClient with strategy2 and strategy3 disabled in BotState."""
+    state = BotState.create(equity=10000.0, day_start_equity=9500.0)
+    state.strategy_configs["strategy2"] = StrategyRuntimeConfig(
+        id="strategy2", enabled=False
+    )
+    state.strategy_configs["strategy3"] = StrategyRuntimeConfig(
+        id="strategy3", enabled=False
+    )
+    app = web.Application()
+    setup_routes(app, state, bot_config)
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    yield client
+    await client.close()
+
+
+class TestSnapshotDisabledStrategies:
+    """B.2 — snapshot shape when env strategy flags disable momentum/MM."""
+
+    async def test_snapshot_strategies_length_three(
+        self, test_client_disabled_strategies, bot_config
+    ) -> None:
+        """strategies array always has exactly 3 entries regardless of enabled state."""
+        resp = await test_client_disabled_strategies.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert len(body["strategies"]) == 3
+
+    async def test_snapshot_strategy1_live_others_paused(
+        self, test_client_disabled_strategies, bot_config
+    ) -> None:
+        """strategy1=live, strategy2/strategy3=paused when flags are False."""
+        resp = await test_client_disabled_strategies.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        by_id = {s["id"]: s for s in body["strategies"]}
+        assert by_id["strategy1"]["status"] == "live"
+        assert by_id["strategy2"]["status"] == "paused"
+        assert by_id["strategy3"]["status"] == "paused"
+
+    async def test_snapshot_strategies_deterministic_order(
+        self, test_client_disabled_strategies, bot_config
+    ) -> None:
+        """strategies array order must be strategy1, strategy2, strategy3
+        regardless of dict insertion order (B.2 reviewer Finding 6)."""
+        resp = await test_client_disabled_strategies.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        ids = [s["id"] for s in body["strategies"]]
+        assert ids == ["strategy1", "strategy2", "strategy3"]
+
+    async def test_snapshot_strategy_configs_deterministic_order(
+        self, test_client_disabled_strategies, bot_config
+    ) -> None:
+        """strategyConfigs array order must also be strategy1, strategy2, strategy3."""
+        resp = await test_client_disabled_strategies.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        cfg_ids = [c["id"] for c in body["strategyConfigs"]]
+        assert cfg_ids == ["strategy1", "strategy2", "strategy3"]

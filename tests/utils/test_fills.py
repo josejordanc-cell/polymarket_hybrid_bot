@@ -45,7 +45,7 @@ async def test_broadcast_fill_broadcasts_when_emitter_registered() -> None:
         action="UP",
         price=0.42,
         size=10.0,
-        strategy="strategy1",
+        strategy="intra_arbitrage",
         pnl=None,
     )
 
@@ -65,6 +65,7 @@ async def test_broadcast_fill_broadcasts_when_emitter_registered() -> None:
     assert payload["size"] == 10.0
     assert payload["pnl"] is None
     assert payload["status"] == "filled"
+    # strategy is translated to the dashboard contract id at the wire boundary (B.1)
     assert payload["strategy"] == "strategy1"
     assert isinstance(payload["id"], str) and payload["id"]
     assert isinstance(payload["time"], str) and payload["time"]
@@ -76,7 +77,7 @@ async def test_broadcast_fill_is_noop_when_no_emitter() -> None:
     assert fills_mod._emitter is None
     # Must not raise.
     await broadcast_fill(
-        market_id="m", action="DOWN", price=0.1, size=1.0, strategy="strategy2",
+        market_id="m", action="DOWN", price=0.1, size=1.0, strategy="momentum_latency",
     )
 
 
@@ -89,7 +90,7 @@ async def test_broadcast_fill_pnl_round_trip_when_provided() -> None:
 
     await broadcast_fill(
         market_id="m", action="UP", price=0.5, size=2.0,
-        strategy="strategy1", pnl=12.34,
+        strategy="intra_arbitrage", pnl=12.34,
     )
 
     payload = em.broadcast.await_args.args[0]["payload"]
@@ -102,8 +103,8 @@ async def test_broadcast_fill_mints_unique_ids_across_calls() -> None:
     em = _make_mock_emitter()
     set_emitter(em)
 
-    await broadcast_fill(market_id="m1", action="UP", price=0.1, size=1.0, strategy="strategy1")
-    await broadcast_fill(market_id="m2", action="DOWN", price=0.2, size=2.0, strategy="strategy2")
+    await broadcast_fill(market_id="m1", action="UP", price=0.1, size=1.0, strategy="intra_arbitrage")
+    await broadcast_fill(market_id="m2", action="DOWN", price=0.2, size=2.0, strategy="momentum_latency")
 
     ids = [call.args[0]["payload"]["id"] for call in em.broadcast.await_args_list]
     assert len(ids) == 2
@@ -126,10 +127,50 @@ async def test_broadcast_fill_payload_validates_against_pydantic_fillrecord() ->
         action="UP",
         price=0.6,
         size=5.0,
-        strategy="strategy3",
+        strategy="market_maker",
         pnl=None,
     )
 
     payload = em.broadcast.await_args.args[0]["payload"]
     # If FillRecord fields drift, this raises ValidationError.
     FillRecord.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_fill_translates_internal_strategy_name() -> None:
+    """Payload strategy field must be the dashboard contract id (strategy1/2/3),
+    not the internal name (intra_arbitrage etc.). B.1 regression guard."""
+    em = _make_mock_emitter()
+    set_emitter(em)
+
+    await broadcast_fill(
+        market_id="0xABC123",
+        action="UP",
+        price=0.5,
+        size=10.0,
+        strategy="intra_arbitrage",
+    )
+
+    payload = em.broadcast.await_args.args[0]["payload"]
+    assert payload["strategy"] == "strategy1"
+
+
+@pytest.mark.asyncio
+async def test_broadcast_fill_unmapped_strategy_raises_and_logs() -> None:
+    """When an unmapped internal name (e.g. smart_money_copy) reaches
+    broadcast_fill, the ValueError from bot_to_dashboard propagates through
+    the try/except and is logged as dashboard_fill_broadcast_failed."""
+    em = _make_mock_emitter()
+    set_emitter(em)
+
+    # Must not raise out of the coroutine — failures are swallowed per contract.
+    await broadcast_fill(
+        market_id="m",
+        action="UP",
+        price=0.5,
+        size=1.0,
+        strategy="smart_money_copy",
+    )
+
+    # broadcast must NOT have been called — the error path short-circuits.
+    assert em.broadcast.await_count == 0

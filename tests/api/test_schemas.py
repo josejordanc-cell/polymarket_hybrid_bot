@@ -19,6 +19,8 @@ from api.schemas import (
     StrategyConfig,
     StrategyConfigPatch,
     StrategyRuntimeConfig,
+    bot_to_dashboard,
+    dashboard_to_bot,
 )
 
 # ---------------------------------------------------------------------------
@@ -387,3 +389,60 @@ def test_stopresponse_with_ts() -> None:
     assert resp2.ok is True
     assert resp2.stoppedAt == 1700000000000
     assert isinstance(resp2.stoppedAt, int)
+
+
+# ---------------------------------------------------------------------------
+# Section: bot_to_dashboard / dashboard_to_bot helpers (B.1)
+# ---------------------------------------------------------------------------
+
+
+def test_bot_to_dashboard_intra_arbitrage() -> None:
+    assert bot_to_dashboard("intra_arbitrage") == "strategy1"
+
+
+def test_bot_to_dashboard_momentum_latency() -> None:
+    assert bot_to_dashboard("momentum_latency") == "strategy2"
+
+
+def test_bot_to_dashboard_market_maker() -> None:
+    assert bot_to_dashboard("market_maker") == "strategy3"
+
+
+def test_bot_to_dashboard_smart_money_copy_raises() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        bot_to_dashboard("smart_money_copy")
+    assert "smart_money_copy" in str(exc_info.value)
+    assert "v1.0 contract" in str(exc_info.value)
+
+
+def test_bot_to_dashboard_garbage_raises() -> None:
+    with pytest.raises(ValueError):
+        bot_to_dashboard("garbage")
+
+
+def test_dashboard_to_bot_strategy1() -> None:
+    assert dashboard_to_bot("strategy1") == "intra_arbitrage"
+
+
+def test_dashboard_to_bot_strategy2() -> None:
+    assert dashboard_to_bot("strategy2") == "momentum_latency"
+
+
+def test_dashboard_to_bot_strategy3() -> None:
+    assert dashboard_to_bot("strategy3") == "market_maker"
+
+
+def test_dashboard_to_bot_strategy4_raises() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        dashboard_to_bot("strategy4")
+    assert "strategy4" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("internal_name", [
+    "intra_arbitrage",
+    "momentum_latency",
+    "market_maker",
+])
+def test_round_trip_identity(internal_name: str) -> None:
+    """dashboard_to_bot(bot_to_dashboard(x)) == x for all three mapped names."""
+    assert dashboard_to_bot(bot_to_dashboard(internal_name)) == internal_name

@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import structlog
 
+from api.schemas import bot_to_dashboard
+
 if TYPE_CHECKING:
     from api.emit import Emitter
 
@@ -105,7 +107,7 @@ async def broadcast_fill(
             "size": float(size),
             "pnl": float(pnl) if pnl is not None else None,
             "status": "filled",
-            "strategy": str(strategy),
+            "strategy": bot_to_dashboard(str(strategy)),
         }
         await em.broadcast({"type": "FILL", "payload": payload})
     except Exception as exc:
