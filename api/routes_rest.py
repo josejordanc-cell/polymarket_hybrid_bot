@@ -83,10 +83,19 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
                 # and d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift).
                 pipelineStep=pipeline_step_map[cfg.id],
             )
-            for cfg in snap.strategy_configs.values()
+            for cfg in (
+                snap.strategy_configs[k]
+                for k in ("strategy1", "strategy2", "strategy3")
+                if k in snap.strategy_configs
+            )
         ],
         strategyConfigs=[
-            cfg.to_contract() for cfg in snap.strategy_configs.values()
+            cfg.to_contract()
+            for cfg in (
+                snap.strategy_configs[k]
+                for k in ("strategy1", "strategy2", "strategy3")
+                if k in snap.strategy_configs
+            )
         ],
         openPositions=[],   # OQ-3 stub
         recentFills=list(snap.recent_fills),
