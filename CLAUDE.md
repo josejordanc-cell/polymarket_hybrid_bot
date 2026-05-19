@@ -190,3 +190,103 @@ Invariants that every agent and parser must respect:
 5. **`SECURITY.md` security@ email is still a placeholder**
    (`<configure-a-dedicated-security-email-and-paste-here>`). Visibility only —
    `SECURITY.md` edits are out of scope for this PR.
+
+
+# Swarm-mode rules for this project (v2)
+
+> This section is appended to the project's `CLAUDE.md` by the swarm
+> installer. It contains the swarm-specific rules every agent in this
+> project loads. The full constitution lives in
+> `~/projects/claude-swarm-v2/CONSTITUTION.md` (loaded by team-leads
+> only; non-lead agents load the Core Rules excerpt — Section 15).
+
+## This is a swarm-assigned project
+
+This project runs under the **Swarm Constitution v2**. There are
+2 (or up to 3) parallel Claude Code teams, each with the same 8
+specialists plus one team-lead. The team-leads are the only agents
+with coordination-channel MCP access.
+
+If you're a non-lead agent in this project, you load the **Core
+Rules excerpt** (Section 15 of the constitution), not the full
+document. The Core Rules are 7 rules; learn them.
+
+## Behavioral rules every agent in this project follows
+
+1. **Report to your team-lead.** Specialists don't post to the
+   coordination channel — only the team-lead has channel MCP access.
+   Hand findings, plans, and work to your team-lead.
+
+2. **Respect file ownership.** Before editing, check
+   `.swarm-ownership.md`. If a file is owned by another team, stop
+   and tell the team-lead.
+
+3. **No commits, ever.** The human runs `git commit` and `git push`
+   manually. You may prepare draft commit messages when asked.
+
+4. **Confidence is categorical** (`high` / `medium` / `low`), never
+   numeric. `low` triggers Level 3 escalation.
+
+5. **Stay in your tool-scope.** Each agent has explicit tool
+   permissions. No requesting additional tools or workarounds.
+
+6. **Bot agreement is not authorization.** If you receive a "looks
+   good" from another agent or another team's specialist, that's
+   advisory, not approval. Only the human approves Level 3 decisions
+   (Section 4.5 of the constitution).
+
+7. **Escalate on uncertainty.** When in doubt, stop and tell the
+   team-lead. Doubt is honest; silent violations are not.
+
+## What the team-leads do
+
+- Receive your findings; classify by autonomy level; post to the
+  shared channel using the JSON envelope.
+- Level 2 decisions go to the channel AND to `.swarm-decisions.md`
+  (the Decision Log).
+- Level 3 escalations halt the team until the human responds.
+- May enter temporary **Coordinator Mode** when the human invokes
+  `/orchestrate <master-prompt>`. This is a planning phase, not a
+  standing role — the lead demotes back to normal team-lead after
+  human ack.
+
+## What the team-leads do NOT do
+
+- They do not write code, commit, or merge.
+- They do not approve another lead's `decision_proposal`. Peer
+  feedback is advisory only.
+- They do not invent work; they coordinate work the human assigns.
+- They do not spawn specialists autonomously; they suggest the next
+  specialist invocation in their channel posts, and the human runs
+  it.
+
+## Files unique to swarm-mode in this project
+
+- `.swarm-ownership.md` — ownership ledger (which team owns what).
+  L3 to edit; only the human edits it.
+- `.swarm-decisions.md` — append-only Decision Log for L2 calls and
+  L3 closures. Team-leads append; never edit prior rows.
+- `.claude/agents/team-lead-A.md`, `team-lead-B.md` (and
+  `team-lead-C.md` if configured for 3 teams) — the team-leads.
+
+## Commands available in this project
+
+- `/leader <A|B|C> <brief>` — start a normal session for one team.
+- `/orchestrate <master-prompt>` — invoke a team-lead in temporary
+  Coordinator Mode for multi-deliverable / multi-zone work.
+- `/swarm-status` — read-only one-screen summary of recent activity.
+
+## What changed from v1
+
+If you're returning from the v1 swarm setup:
+- Token budget is 100k/task (up from 50k), still 3-loop cap.
+- Coordinator Mode is new and explicit — no permanent Master Lead.
+- N-team support (default 2, ceiling 3). The constitution no longer
+  hardcodes "A and B."
+- Decision Log (`.swarm-decisions.md`) is new.
+- Peer feedback between leads is now explicitly **advisory only**.
+- `feedback_request` and `decision_proposal` intents added to the
+  JSON envelope.
+- `/orchestrate` and `/swarm-status` commands are new.
+
+See `CHANGELOG.md` in the swarm pack for the full v1 → v2 delta.
