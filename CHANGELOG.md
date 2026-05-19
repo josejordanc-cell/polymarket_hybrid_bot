@@ -144,6 +144,46 @@ Task **T7** (PR #17) is summarised under `### Changed` below. Task **T9**
 ### Notes
 - Both changes are docs/meta-only. No behavioral change. No droplet redeploy required. Image digest unchanged.
 
+## v0.2.8 — 2026-05-18
+
+D.2.4 emit-site swarm (ALERT, FILL, STRATEGY_UPDATE batches). Two of three batches landed contract-conformant; STRATEGY_UPDATE wire-up was caught contract-nonconformant by post-implementation empirical verification and was reverted before the v0.2.8 tag moved to its final HEAD.
+
+### Added
+
+- **ALERT emit site** (D.2.4 step 1, SHA `4f63d9b`): `utils/alerts.send_alert` now broadcasts a `WsAlert` envelope to dashboard subscribers via a module-level Emitter singleton, in addition to the existing Telegram/Discord and `state.recent_alerts` sinks. Empirically verified against the dashboard's zod `WsMessageSchema` at b26eb3d — happy path parses cleanly and the dashboard reducer applies the alert to `alertsStore`.
+- **FILL emit site** (D.2.4 step 2, SHA `a98f3ea`): `main._exec_and_record` broadcasts a `WsFill` envelope after the existing `risk_manager.on_fill` and Prometheus `record_fill` sinks. `FillRecord.pnl` is `Optional[float]` (emits `null` at fill time; dashboard `FillSchema.pnl` is `.nullable()` — the FILL-style Level-1 escalation pattern). Empirically verified the same way as ALERT: happy path (`pnl=null`), pnl-known path (`pnl=42.5`), and `status="pending"` edge case all parse cleanly.
+- **StrategyCardData reshape** (`api/schemas.py`): contract-aligned per `BOT_CONTRACT.md:113`. `status` is `Literal["live", "paused"]`; 7 telemetry fields (`pnlToday`, `pnlMonth`, `winRate`, `tradesToday`, `avgHoldMinutes`, `lastSignal`, `exposure`) are `Optional` (bot emits `null` at snapshot time for unstarted strategies); `sparkline: list[float]` defaults empty. `_build_snapshot` simplified to match. Dashboard companion at `crypto-trading-bot-dashboard@6a6774e` made the corresponding zod fields `.nullable()` and added null-safe rendering across 5 components.
+- **Schema-contract regression tests** (`tests/api/test_schema_contract.py`): ALERT/FILL envelope-flatness snapshots, `FillRecord.pnl` is-required-False invariant, STRATEGY_UPDATE envelope-flatness. STRATEGY_UPDATE field-set test rewritten to assert against the LITERAL contract text in `BOT_CONTRACT.md:609`, not against the bot's pydantic model (discipline lesson — see Reverted below).
+- **Broadcast infrastructure** (`utils/strategy_updates.py`): sync-from-async bridge via `asyncio.get_running_loop().create_task(...)`, module-level Emitter singleton mirroring `utils/alerts.py` and `utils/fills.py`. 5 unit tests in `tests/utils/test_strategy_updates.py`. **No correct emit site wired in v0.2.8** — see Reverted below; v0.2.9 will wire from the future strategy-telemetry pipeline.
+
+### Reverted (pre-final-tag)
+
+- **STRATEGY_UPDATE wire-up** at `api/state.py:BotState.apply_strategy_patch` (introduced `d1d2276`, reverted in v0.2.8 post-tag correction). The bot was wired to emit `{enabled, maxPositionSize, riskBudget, activePairs}` (StrategyConfigPatch fields). `BOT_CONTRACT.md:413, 609` specifies `STRATEGY_UPDATE.updates` as a partial of `StrategyCardData` (card-telemetry fields): `name, status, pnlToday, pnlMonth, winRate, tradesToday, avgHoldMinutes, lastSignal, pipelineStep, exposure, sparkline`. The two field-sets are disjoint at the field-name level. The dashboard's zod `StrategyCardUpdatesSchema.partial()` silently strips unknown keys, so the bot's emission produced `updates: {}` after parse and the reducer applied a no-op spread `{...row, ...{}}`. Wire-valid, contract-nonconformant, silent functional no-op. Caught by empirical round-trip testing against the dashboard's actual zod schemas at `crypto-trading-bot-dashboard@b26eb3d`.
+- **StrategyUpdateFields shape** reshaped from the 4-field `StrategyConfigPatch` mirror to the contract-correct 11-field partial of `StrategyCardData` (all `Optional`). Contract-correct but no caller exists; ready for the v0.2.9 emit site.
+- **`_set_strategy_updates_emitter` registration** removed from `api/server.py` (no current caller, so no need to register the helper at server startup; `utils/alerts` and `utils/fills` registrations retained).
+- **3 sync `apply_strategy_patch` tests** in `tests/api/test_state.py` reverted to minimal pre-d1d2276 bodies (no mock-emitter setup). The async `test_apply_strategy_patch_broadcasts_when_loop_running` test was deleted (the broadcast behavior it asserted no longer exists).
+- **STRATEGY_UPDATE field-set regression test** in `tests/api/test_schema_contract.py` renamed from `test_strategy_update_fields_match_bot_runtime_patch_shape` to `test_strategy_update_fields_match_contract_card_partial`, with the snapshot constant moved from `_BOT_STRATEGY_UPDATE_FIELDS` (4 wrong fields) to `_CONTRACT_STRATEGY_UPDATE_FIELDS` (11 correct fields, copy-pasted from `BOT_CONTRACT.md:609`). The "permissive superset, semantic not syntactic" prose rationalization was removed.
+
+### Documentation
+
+- **Audit doc `docs/audit/d24-emit-site-audit.md`**:
+  - §6.0 expanded from "Two strategy surfaces" to **"Three strategy surfaces"** — adding the card-telemetry display surface (`StrategyCardData` partial, the contract's `STRATEGY_UPDATE.updates`) alongside boot-time `config.strategy.*` and runtime `state.strategy_configs[<id>]`. The d1d2276 wiring confused surface (2) for surface (3); future emit-site work must identify which of the three it's emitting from.
+  - §9.3 rewritten with explicit landed-vs-reverted breakdown.
+  - §10 (continued, again) STRATEGY_UPDATE narrative gained a "**2026-05-18 correction**" block at the top of the section identifying what's wrong and what's still factually accurate in the historical narrative. The "Process note" at the end was rewritten to strike the bogus "STRATEGY_UPDATE-style escalation pattern" and add a discipline lesson: **contract-regression tests must assert against the literal contract text in `BOT_CONTRACT.md`, never against the bot's own pydantic model.** Bot-against-bot snapshots are self-consistent with whatever the bot emits — including the wrong thing.
+- **Dashboard `PROJECT_HANDOFF.md`** (companion commit at `crypto-trading-bot-dashboard@<commit-B-SHA>`): walks back the "D.2.4 COMPLETE" framing. ALERT + FILL are complete; STRATEGY_UPDATE emit-site landed contract-nonconformant and was reverted; v0.2.9 will wire the correct emit site from the strategy-telemetry pipeline.
+
+### Notes
+
+- **v0.2.8 tag was moved.** The original tag at `816354b` claimed "D.2.4 emit-site wiring complete across all three WsMessage types," which was inaccurate for STRATEGY_UPDATE. Tag was deleted locally + on origin and re-anchored at the post-correction HEAD with an accurate message describing what actually shipped.
+- **Production droplet at `157.230.63.174:/opt/polymarket_hybrid_bot` remains on v0.2.7.** Redeploy to v0.2.8 pending; D.3 droplet smokes will use the corrected tag.
+- **v0.2.9 scope (forward)**: wire the correct STRATEGY_UPDATE emit site from the strategy-telemetry pipeline (whichever module produces `StrategyCardData` deltas downstream — does not exist today). The bot's `StrategyUpdateFields` is contract-correct and ready; `utils/strategy_updates.broadcast_strategy_update` is ready; `api/server.py` `_set_strategy_updates_emitter` registration will be re-added when the caller lands. Separately, the E.1-E.5 cross-team-L2 items catalogued in the dashboard repo's `docs/audit/d3-schema-audit.md` (pre-existing `GlobalStats` / `OpenPosition` / `StrategyConfig` / etc. mismatches not introduced by v0.2.8) remain open work items.
+
+### Tests
+
+164 passed (was 165 pre-correction; the deleted `test_apply_strategy_patch_broadcasts_when_loop_running` accounts for the delta).
+
+---
+
 ## v0.2.7 — 2026-05-13
 
 D.2.3 — WebSocket broadcaster module wired on top of v0.2.6's REST API. REST contract frozen since v0.2.6 (`api/schemas.py` blob `8ccdb63c`, `api/routes_rest.py` blob `8ae836cf`).

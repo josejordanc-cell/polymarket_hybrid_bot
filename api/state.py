@@ -291,24 +291,18 @@ class BotState:
         Apply a StrategyConfigPatch to the corresponding strategy config
         in-place.  Caller must hold write_lock if needed for atomicity.
 
-        After applying the patch, broadcasts a STRATEGY_UPDATE WsMessage
-        to dashboard subscribers if a WS Emitter has been registered via
-        utils.strategy_updates.set_emitter (only in the running-server
-        context; no-op in sync tests). The broadcast carries ONLY the
-        fields that were non-None in the patch — the per-strategy delta
-        semantic the dashboard expects (lib/applyWsMessage.ts:69-72).
-        See docs/audit/d24-emit-site-audit.md §10 (STRATEGY_UPDATE
-        drift + Level-1 escalation).
+        NOTE (v0.2.8 post-tag correction): an earlier version of this
+        method broadcast a STRATEGY_UPDATE WsMessage to dashboard
+        subscribers after applying the patch (introduced in d1d2276,
+        reverted here). That wiring was contract-nonconformant:
+        BOT_CONTRACT.md:609 specifies STRATEGY_UPDATE.updates as a
+        partial of StrategyCardData (card-telemetry fields), not
+        StrategyConfigPatch (runtime-config fields). The bot emitted
+        config-patch fields, the dashboard zod parser stripped them as
+        unknown keys, and the reducer applied an empty delta — silent
+        no-op. The correct emit site is the strategy-telemetry
+        pipeline (v0.2.9). See docs/audit/d24-emit-site-audit.md §6.0
+        (three strategy surfaces) and §10 (correction block).
         """
         current = self.strategy_configs[patch.id]
         self.strategy_configs[patch.id] = current.apply_patch(patch)
-
-        # Lazy import: keeps api.state module-load cheap and avoids any
-        # circular-import risk with utils/strategy_updates which itself
-        # imports from api.emit at TYPE_CHECKING time only.
-        from utils.strategy_updates import broadcast_strategy_update
-        updates_delta = patch.model_dump(exclude_none=True, exclude={"id"})
-        broadcast_strategy_update(
-            strategy_id=patch.id,
-            updates=updates_delta,
-        )

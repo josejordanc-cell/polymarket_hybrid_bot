@@ -1,37 +1,36 @@
 """
 utils/strategy_updates.py
-Dashboard WebSocket STRATEGY_UPDATE broadcasting (D.2.4 step 3).
+Dashboard WebSocket STRATEGY_UPDATE broadcasting infrastructure.
 
-When the HTTP API server is running, ``set_emitter`` is called from
-``api/server.py`` to register the Emitter. The single call site is
-``api/state.py:BotState.apply_strategy_patch`` (audit §5.3
-recommendation), which invokes ``broadcast_strategy_update`` after
-applying a ``StrategyConfigPatch``. If no Emitter has been registered
-(e.g. unit tests not exercising broadcast), the broadcast step
-silently no-ops.
+STATUS (v0.2.8 post-tag correction): NOT CURRENTLY WIRED to any emit
+site. An earlier version called this from
+``api/state.py:BotState.apply_strategy_patch`` (introduced d1d2276)
+emitting ``StrategyConfigPatch`` fields, which violated
+BOT_CONTRACT.md:609 (STRATEGY_UPDATE.updates is a partial of
+StrategyCardData, not StrategyConfigPatch). That wiring was reverted
+post-tag-move. See ``docs/audit/d24-emit-site-audit.md`` §6.0 (three
+strategy surfaces) and §10 (correction block). The correct emit site
+is the strategy-telemetry pipeline (v0.2.9): once that pipeline
+produces ``StrategyCardData`` deltas, this broadcast helper is what
+fires the WS message. The broadcast machinery itself is contract-
+correct; only the caller is missing.
 
-Sync entry point + auto-scheduling: unlike utils/fills.broadcast_fill
-(async, called from the async strategy loop), this module's
-``broadcast_strategy_update`` is SYNC because ``apply_strategy_patch``
-is sync and called from both async HTTP route handlers and sync test
-setup paths. Sync callers can't ``await`` the underlying async
-``Emitter.broadcast``, so we schedule it via the currently-running
-event loop's ``create_task``. If no loop is running (i.e. called from
-a sync test outside of any event loop), the broadcast is a no-op —
-that's the correct semantics for a test that isn't exercising the
+Sync entry point + auto-scheduling: ``broadcast_strategy_update`` is
+SYNC so it can be called from sync state-mutation paths. It probes
+for a running event loop and schedules the underlying async
+``Emitter.broadcast`` via ``loop.create_task``. If no loop is running
+(sync test context with no event loop), the broadcast is a silent
+no-op — correct semantics for tests that aren't exercising the
 broadcast path.
 
 The module-level ``_emitter`` singleton + ``set_emitter`` / ``get_emitter``
 pattern mirrors ``utils/alerts.py`` (D.2.4 step 1), ``utils/fills.py``
-(D.2.4 step 2), and ``observability/metrics_exporter.py``. See
-docs/audit/d24-emit-site-audit.md §10 for context.
+(D.2.4 step 2), and ``observability/metrics_exporter.py``.
 
-Payload shape: ``{type: "STRATEGY_UPDATE", payload: {strategyId, updates}}``
-where ``updates`` contains only the StrategyConfigPatch fields that were
-non-None (the per-strategy delta semantic the dashboard expects). The
-bot's StrategyUpdateFields is intentionally narrower than the dashboard's
-permissive StrategyCardUpdatesSchema — see d24-emit-site-audit.md §10
-(STRATEGY_UPDATE drift, bot-narrower paragraph) for rationale.
+Payload shape (per BOT_CONTRACT.md:413, when wired correctly):
+    {"type": "STRATEGY_UPDATE",
+     "payload": {"strategyId": <id>,
+                 "updates": {<partial of StrategyCardData minus id>}}}
 """
 from __future__ import annotations
 
@@ -86,10 +85,12 @@ def broadcast_strategy_update(
 
     Args:
         strategy_id: The contract strategy id ("strategy1"/"strategy2"/"strategy3").
-        updates: The delta dict. Should contain ONLY non-None fields the
-                 patch actually changed. Caller is responsible for
-                 filtering: typically ``patch.model_dump(exclude_none=True,
-                 exclude={"id"})`` from inside ``apply_strategy_patch``.
+        updates: The delta dict. Per BOT_CONTRACT.md:609, allowed keys
+                 are a partial of StrategyCardData: name, status,
+                 pnlToday, pnlMonth, winRate, tradesToday,
+                 avgHoldMinutes, lastSignal, pipelineStep, exposure,
+                 sparkline. Empty {} is valid. Caller is responsible
+                 for producing the delta from upstream telemetry.
 
     Payload shape (matches dashboard StrategyUpdateSchema and the bot's
     api.schemas.StrategyUpdate):

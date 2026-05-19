@@ -14,12 +14,15 @@ Scope as of this batch (D.2.4 step 3):
   - FILL            : bot WsFill.payload            == FillRecord     (flat, post-FILL-batch shape)
   - STRATEGY_UPDATE : bot WsStrategyUpdate.payload  == StrategyUpdate (flat, post-step-3 shape)
 
-STRATEGY_UPDATE has two snapshots: (a) the envelope-flatness invariant
-parallel to ALERT/FILL, and (b) a field-set assertion that the bot's
-StrategyUpdateFields is a *subset* of the dashboard's permissive
-StrategyCardUpdatesSchema. The asymmetry (bot narrower than dashboard)
-is intentional — see d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift,
-bot-narrower paragraph).
+STRATEGY_UPDATE has two invariants: (a) the envelope-flatness
+invariant parallel to ALERT/FILL, and (b) a field-set assertion that
+the bot's StrategyUpdateFields MATCHES the contract's StrategyCardData
+partial per BOT_CONTRACT.md:413, 609. Assertion is against the literal
+contract text (the constant in this file is copy-pasted from
+BOT_CONTRACT.md), NOT against the bot's own pydantic model — see the
+v0.2.8 post-tag correction in d24-emit-site-audit.md §6.0 (three
+strategy surfaces) and §10 (correction block) for the discipline
+rationale.
 
 The snapshots below capture the dashboard contract as it stood when
 this test was written. If the dashboard side moves first, both this
@@ -144,14 +147,25 @@ def test_fill_record_pnl_is_optional() -> None:
     )
 
 
-# Hardcoded snapshot of dashboard StrategyCardUpdatesSchema field-set
-# (components/dashboard/schemas.ts:211 — derived from
-# StrategyCardDataSchema.omit({id: true}).partial() as of D.2.4 step 3).
-# This is the *permissive superset* the bot's narrower StrategyUpdateFields
-# is allowed to lie within. The four bot fields must all appear in this set;
-# the dashboard accepting more is fine. See d24-emit-site-audit.md §10
-# (STRATEGY_UPDATE drift, bot-narrower paragraph).
-_DASH_STRATEGY_CARD_UPDATES_FIELDS = {
+# Hardcoded snapshot of the contract-truth STRATEGY_UPDATE.updates
+# field-set per BOT_CONTRACT.md:413, 609. Source of truth: the
+# dashboard's StrategyCardUpdatesSchema =
+# StrategyCardDataSchema.omit({id: true}).partial() at
+# components/dashboard/schemas.ts:211. The bot's StrategyUpdateFields
+# MUST match this set exactly — STRATEGY_UPDATE carries card-telemetry
+# deltas, not config-patch deltas.
+#
+# HISTORY (v0.2.8 post-tag correction): an earlier version of this
+# test file (introduced d1d2276) defined a separate
+# _BOT_STRATEGY_UPDATE_FIELDS = {enabled, maxPositionSize, riskBudget,
+# activePairs} and rationalized the bot/dashboard disjoint-ness as
+# "permissive superset, semantic not syntactic." That was wrong: the
+# bot's emission was empirically a no-op on the dashboard side because
+# zod's .partial() stripped all four unknown keys. The correct
+# invariant is: bot field-set == contract field-set, asserted against
+# the literal contract text. See d24-emit-site-audit.md §6.0 (three
+# strategy surfaces) and §10 (correction block).
+_CONTRACT_STRATEGY_UPDATE_FIELDS = {
     "name",
     "status",
     "pnlToday",
@@ -165,47 +179,30 @@ _DASH_STRATEGY_CARD_UPDATES_FIELDS = {
     "sparkline",
 }
 
-# The four runtime-config fields the bot can actually emit. These must
-# all be a subset of _DASH_STRATEGY_CARD_UPDATES_FIELDS… EXCEPT they
-# aren't card-data fields at all — they're runtime-config fields. The
-# dashboard's StrategyCardUpdatesSchema does NOT include
-# enabled/maxPositionSize/riskBudget/activePairs. This means the
-# permissive-superset invariant is satisfied *vacuously* (bot emits
-# fields the dashboard treats as unknown via .passthrough()/.strict()
-# behaviour on partial schemas — zod's .partial() ignores unknown keys
-# by default). The test we land here is a positive snapshot of the bot's
-# four-field shape, plus an envelope-flatness invariant. The
-# "permissive superset" claim is documented but not asserted as a strict
-# subset relation, because the relation is in fact disjoint at the
-# field-name level: dashboard cares about card-data partial; bot emits
-# runtime-config patch. The semantic glue is the patch endpoint's
-# transformation logic on the dashboard side.
-_BOT_STRATEGY_UPDATE_FIELDS = {
-    "enabled",
-    "maxPositionSize",
-    "riskBudget",
-    "activePairs",
-}
 
+def test_strategy_update_fields_match_contract_card_partial() -> None:
+    """StrategyUpdateFields must match the contract-truth field-set:
+    a partial of StrategyCardData per BOT_CONTRACT.md:413, 609.
+    Allowed keys: name, status, pnlToday, pnlMonth, winRate, tradesToday,
+    avgHoldMinutes, lastSignal, pipelineStep, exposure, sparkline.
 
-def test_strategy_update_fields_match_bot_runtime_patch_shape() -> None:
-    """StrategyUpdateFields is intentionally narrow: only the four fields
-    a StrategyConfigPatch can mutate (enabled, maxPositionSize, riskBudget,
-    activePairs). If this drifts, either StrategyConfigPatch grew a new
-    field or someone widened StrategyUpdateFields beyond what the patch
-    endpoint can produce. Both warrant review.
-
-    See d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift, bot-narrower
-    paragraph)."""
+    This test asserts against the LITERAL CONTRACT TEXT (the constant
+    above is copy-pasted from BOT_CONTRACT.md:609), NOT against the
+    bot's own pydantic model. Asserting bot-against-bot proves nothing —
+    that's the self-consistent-but-wrong failure mode the d1d2276
+    wiring fell into. See d24-emit-site-audit.md §10 (correction block,
+    process note on contract-regression test discipline)."""
     bot = _pydantic_field_names(StrategyUpdateFields)
-    expected = _BOT_STRATEGY_UPDATE_FIELDS
+    expected = _CONTRACT_STRATEGY_UPDATE_FIELDS
     assert bot == expected, (
-        f"StrategyUpdateFields drifted from runtime-config patch shape. "
+        f"StrategyUpdateFields drifted from contract field-set "
+        f"(BOT_CONTRACT.md:609). "
         f"Bot has: {sorted(bot)}; expected: {sorted(expected)}. "
-        "If StrategyConfigPatch changed, this snapshot moves with it. "
-        "If StrategyUpdateFields widened independently of the patch, "
-        "stop and review — the bot would be claiming wire shape it can't "
-        "actually produce."
+        "If the contract changed, update the snapshot above to match "
+        "BOT_CONTRACT.md:609. If StrategyUpdateFields changed "
+        "independently of the contract, stop and review — see "
+        "d24-emit-site-audit.md §6.0 (three strategy surfaces) for "
+        "the surface that STRATEGY_UPDATE should emit from."
     )
 
 

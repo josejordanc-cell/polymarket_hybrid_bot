@@ -411,29 +411,62 @@ class PriceTick(BaseModel):
 
 
 class StrategyUpdateFields(BaseModel):
-    """The four fields the bot can actually mutate via
-    StrategyConfigPatch. All Optional; only fields the patch changed
-    are emitted (model_dump(exclude_none=True)).
+    """Partial of StrategyCardData per BOT_CONTRACT.md:413, 609.
+
+    Allowed keys (all Optional, omit those not changing): name, status,
+    pnlToday, pnlMonth, winRate, tradesToday, avgHoldMinutes, lastSignal,
+    pipelineStep, exposure, sparkline. Empty {} is valid per contract.
 
     Defined before StrategyUpdate so StrategyUpdate.updates can reference
     it without a forward-ref (pydantic v2 forward-refs require
     model_rebuild() and that's an avoidable extra step).
+
+    HISTORY (v0.2.8 post-tag correction): an earlier version of this
+    class held the 4 StrategyConfigPatch fields (enabled,
+    maxPositionSize, riskBudget, activePairs) — see d1d2276. That
+    shape was wrong: STRATEGY_UPDATE per the contract carries
+    card-telemetry deltas, not config-patch deltas. The dashboard's
+    zod schema (StrategyCardUpdatesSchema = StrategyCardDataSchema
+    .omit({id: true}).partial()) stripped the old shape entirely.
+    See d24-emit-site-audit.md §6.0 (three strategy surfaces) and
+    §10 (correction block).
+
+    NO EMIT SITE WIRED IN v0.2.8: this class is contract-correct but
+    nothing currently constructs it. utils/strategy_updates.py has the
+    broadcast infrastructure ready; the caller (the strategy-telemetry
+    pipeline) lands in v0.2.9.
     """
 
-    enabled: Optional[bool] = None
-    maxPositionSize: Optional[float] = None
-    riskBudget: Optional[float] = None
-    activePairs: Optional[str] = None
+    name: Optional[str] = None
+    status: Optional[Literal["live", "paused"]] = None
+    pnlToday: Optional[float] = None
+    pnlMonth: Optional[float] = None
+    winRate: Optional[float] = None
+    tradesToday: Optional[int] = None
+    avgHoldMinutes: Optional[float] = None
+    lastSignal: Optional[Literal["LONG", "SHORT", "EXIT"]] = None
+    pipelineStep: Optional[int] = None
+    exposure: Optional[float] = None
+    sparkline: Optional[list[float]] = None
 
 
 class StrategyUpdate(BaseModel):
-    """STRATEGY_UPDATE payload — intentionally narrower than dashboard
-    StrategyCardUpdatesSchema. Dashboard schema is a partial-of-all-card-
-    fields (permissive); bot can only emit changes to the four
-    StrategyRuntimeConfig fields. Dashboard accepts everything bot emits
-    plus more it doesn't need to receive — this asymmetry is correct.
-    See d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift, bot-narrower
-    paragraph).
+    """STRATEGY_UPDATE payload per BOT_CONTRACT.md:413.
+
+    Envelope: {strategyId, updates: partial-of-StrategyCardData}.
+    Matches the dashboard's StrategyUpdateSchema exactly — both sides
+    use the same 11-field card-telemetry partial. No subset/superset
+    asymmetry.
+
+    HISTORY (v0.2.8 post-tag correction): an earlier version of this
+    docstring claimed the bot was "intentionally narrower than dashboard
+    StrategyCardUpdatesSchema" because the bot emitted the 4
+    StrategyRuntimeConfig fields. That was a misread of the contract —
+    STRATEGY_UPDATE carries card-telemetry deltas, not config-patch
+    deltas — and the resulting wire-up was a silent no-op on the
+    dashboard side (zod's .partial() stripped all 4 unknown keys).
+    See d24-emit-site-audit.md §6.0 (three strategy surfaces) and
+    §10 (correction block).
     """
 
     strategyId: StrategyId

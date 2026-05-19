@@ -101,16 +101,19 @@ Verified against `config/settings.py` at v0.2.7.
 
 ## 6. Cross-cutting notes
 
-### 6.0 Two strategy surfaces — do not confuse
+### 6.0 Three strategy surfaces — do not confuse
 
-Analogous to `config.api` vs `config.http_api`: there are two real strategy-related state surfaces in this codebase, and they are NOT the same.
+Analogous to `config.api` vs `config.http_api`: there are **three** real strategy-related state surfaces in this codebase, and they are NOT the same.
 
 | Surface | Path | Source | Lifecycle | Used by |
 |---|---|---|---|---|
-| Boot-time strategy flags | `config.strategy.*` | `config/settings.py:StrategyConfig` | Set at process start via `BOT_STRAT_*` env vars, immutable thereafter | Strategy init (e.g. `data_feeds/polygon_feed.py:90`, `main.py:486`) |
-| Runtime strategy configs | `state.strategy_configs[<id>]` | `api/state.py:StrategyRuntimeConfig` | Mutable via `POST /api/strategies/config` | Dashboard, REST endpoints, D.2.4 STRATEGY_UPDATE emit |
+| (1) Boot-time strategy flags | `config.strategy.*` | `config/settings.py:StrategyConfig` | Set at process start via `BOT_STRAT_*` env vars, immutable thereafter | Strategy init (e.g. `data_feeds/polygon_feed.py:90`, `main.py:486`) |
+| (2) Runtime strategy configs | `state.strategy_configs[<id>]` | `api/state.py:StrategyRuntimeConfig` | Mutable via `POST /api/strategies/config` | Dashboard config form (REST + snapshot hydration), REST endpoints |
+| (3) Card telemetry (display) | `StrategyCardData` partial — the `STRATEGY_UPDATE.updates` payload per `BOT_CONTRACT.md:413, 609` | computed downstream of trades/PnL by future strategy-telemetry pipeline (v0.2.9+) | Streamed as deltas via WS `STRATEGY_UPDATE` messages | Dashboard strategy card UI rendering only |
 
-D.2.4 STRATEGY_UPDATE emit reads the **runtime** surface. Mixing them up at an emit site would be the exact analog of the v0.2.7 wrong-real-field bug in the strategy domain.
+**STRATEGY_UPDATE on the WS contract is for surface (3) — card telemetry — NOT surface (2).** The dashboard's `applyWsMessage.ts` reducer spreads `STRATEGY_UPDATE.updates` onto a strategy ROW (a `StrategyCardData`), not onto `strategyConfigs`. Per `BOT_CONTRACT.md:437`: *"This message does not update strategyConfigs in the store — only card fields. Config changes from the form rely on REST and snapshot hydration."*
+
+The v0.2.8 d1d2276 wire-up at `apply_strategy_patch` confused surface (2) for surface (3): it emitted `StrategyConfigPatch` fields (`enabled`, `maxPositionSize`, `riskBudget`, `activePairs`) where the contract expects `StrategyCardData` partial keys (`status`, `pnlToday`, etc.). The dashboard's zod `.partial()` schema silently stripped all four unknown keys, the reducer applied an empty delta, and the card UI did not update. Wire-valid, contract-nonconformant, functional no-op. Reverted post-tag-move; see §10 (correction block). Future emit-site work touching "anything strategy-related" must explicitly identify which of the three surfaces it is emitting from.
 
 ### 6.1 Existing observability sinks D.2.4 layers on top of
 
@@ -158,37 +161,26 @@ Wire-up + envelope reconciliation per §10. No `config.*` access introduced
 
 ### 9.2 FILL step — *not yet landed*
 
-### 9.3 STRATEGY_UPDATE step — landed at SHA `d1d2276`
+### 9.3 STRATEGY_UPDATE step — initially landed at `d1d2276`; partially reverted in v0.2.8 post-tag correction
 
-Wire-up + envelope reconciliation per §10 STRATEGY_UPDATE narrative
-(appended at end of this file). Emit site is
-`api/state.py:BotState.apply_strategy_patch`, inserted immediately
-after the in-place mutation of `self.strategy_configs[patch.id]` —
-the single central choke-point the audit recommended (§5.3). Emitter
-handoff via module-level singleton in `utils/strategy_updates.py`,
-mirroring `utils/alerts.py` and `utils/fills.py`.
+**Status (after v0.2.8 post-tag correction):**
 
-Structural twist: `apply_strategy_patch` is sync but
-`Emitter.broadcast` is async, so `broadcast_strategy_update` is a sync
-function that schedules the async broadcast via
-`asyncio.get_running_loop().create_task(...)`. When no loop is running
-(sync test context, no HTTP server), the broadcast no-ops cleanly via
-`try/except RuntimeError` — that's the correct semantics, not a bug.
-See `utils/strategy_updates.broadcast_strategy_update` docstring for
-the full rationale.
+**Landed and KEPT:**
+- `StrategyCardData` reshape in `api/schemas.py` to match `BOT_CONTRACT.md:113` (status `live`|`paused`, 7 nullable telemetry fields, `sparkline: list[float]` default-empty). Snapshot construction in `api/routes_rest.py:_build_snapshot` simplified to match.
+- Envelope flattening: `WsStrategyUpdate.payload` is `StrategyUpdate` directly (no `WsStrategyUpdatePayload` wrapper), parallel to ALERT/FILL.
+- Broadcast infrastructure in `utils/strategy_updates.py` (sync-from-async bridge via `asyncio.get_running_loop().create_task`, module-level emitter singleton). Mechanically correct; awaiting a correct caller.
+- Schema-contract regression test in `tests/api/test_schema_contract.py` for envelope-flatness invariant.
+- Unit tests in `tests/utils/test_strategy_updates.py` (5 scenarios: registered/unregistered, sync-context-no-loop, multi-call, pydantic round-trip with explicit field-readback).
 
-No `config.*` access introduced (audit §5.3 verified N/A). The four
-fields that can be patched (`enabled`, `maxPositionSize`, `riskBudget`,
-`activePairs`) all live on `state.strategy_configs[<id>]` (the runtime
-surface), not `config.strategy.*` (the static-defaults surface) — the
-§6.0 "two strategy surfaces" warning is respected.
+**Landed and REVERTED (post-tag-move):**
+- Wire-up call from `api/state.py:BotState.apply_strategy_patch` to `broadcast_strategy_update`. The emission carried `StrategyConfigPatch` fields (`enabled`, `maxPositionSize`, `riskBudget`, `activePairs`) — surface (2) of the §6.0 three-surface model. `BOT_CONTRACT.md:413, 609` specifies `STRATEGY_UPDATE.updates` as a partial of `StrategyCardData` — surface (3). Empirically confirmed silent no-op: zod's `.partial()` stripped all four unknown keys; dashboard reducer applied `{}` delta. See §10 correction block.
+- `StrategyUpdateFields` reshaped from 4-field `StrategyConfigPatch` mirror to 11-field partial-of-`StrategyCardData` (contract-correct, but no current caller — ready for v0.2.9).
+- `_set_strategy_updates_emitter` registration in `api/server.py` (no caller, so no need to register).
+- `tests/api/test_schema_contract.py` STRATEGY_UPDATE field-set test renamed and rewritten to assert against the **literal contract text** (`BOT_CONTRACT.md:609`), not against the bot's own pydantic model. Discipline lesson: a regression test that asserts bot-against-bot proves nothing — it's self-consistent with whatever the bot emits, including the wrong thing.
 
-Schema-contract regression test `tests/api/test_schema_contract.py`
-extended with three new STRATEGY_UPDATE-targeted tests + a hardcoded
-snapshot of the dashboard's `StrategyCardUpdatesSchema` field-set.
-New unit-test file `tests/utils/test_strategy_updates.py` exercises
-the broadcast helper with 5 scenarios (registered/unregistered, sync-
-context-no-loop, multi-call, pydantic round-trip).
+**Correct emit site is deferred to v0.2.9.** The legitimate source of `StrategyCardData` deltas is the future strategy-telemetry pipeline (which today does not exist; that's part of why d1d2276 wired against the only available surface, which was the wrong one). Once telemetry computes per-strategy `pnlToday`/`tradesToday`/etc deltas, those values feed `broadcast_strategy_update` directly. The mechanism is ready.
+
+The §6.0 three-surface model was expanded in this correction (previously "two surfaces") to make the trap explicit for future emit-site work.
 
 ---
 
@@ -432,6 +424,50 @@ information the bot does not possess at the emit site.
 
 ## 10 (continued, again). STRATEGY_UPDATE step — drift + bot-narrower escalation
 
+> **2026-05-18 correction.** The "Resolution — permissive superset, but
+> semantic not syntactic" subsection below and item 2 of the "Process
+> note" at the end of this section are WRONG. Re-reading `BOT_CONTRACT.md:413`
+> and `:609` confirms `STRATEGY_UPDATE.updates` MUST be a partial of
+> `StrategyCardDataSchema` (card-telemetry display fields), NOT of
+> `StrategyConfigPatch` (runtime-config fields). The two field-sets
+> are disjoint at the field-name level.
+>
+> The bot's d1d2276 emission of `{enabled, maxPositionSize, riskBudget,
+> activePairs}` is wire-valid (the dashboard's zod `.partial()` accepts
+> unknown keys but strips them silently) but **semantically empty**
+> after parse: the resulting `updates` dict is `{}` and the reducer
+> spread `{...row, ...{}}` is a no-op. Empirically verified by
+> reconstructing the dashboard's exact zod schemas + reducer step from
+> `components/dashboard/schemas.ts` at b26eb3d and running the bot's
+> emission through them: parse success, parsed.data.updates `{}`,
+> row-before == row-after.
+>
+> **The `apply_strategy_patch` site is NOT a contract-conformant emit
+> site for STRATEGY_UPDATE.** The legitimate emit site for card-data
+> deltas is the future per-strategy telemetry pipeline (whichever
+> module produces `StrategyCardData` updates downstream — does not
+> exist as of v0.2.8). The v0.2.8 wire-up was REVERTED post-tag-move.
+> See §6.0 (now "three strategy surfaces" — the misread was treating
+> surface (2) runtime-config as the emit source where the contract
+> wants surface (3) card-telemetry).
+>
+> **What from §10's STRATEGY_UPDATE narrative remains correct:**
+> - The schema-drift table showing disjoint bot/dashboard field-name sets — that observation is factually accurate.
+> - The `sparkline` Gate 1 sub-decision (empty list `[]` vs `null`) — still the right call.
+> - The sync-broadcast-from-sync-state-method engineering detail (the bridge mechanism in `utils/strategy_updates.py`) — mechanically sound.
+> - The `StrategyCardData` reshape table — matches `BOT_CONTRACT.md:113` exactly.
+>
+> **What from §10's STRATEGY_UPDATE narrative is WRONG:**
+> - The "Resolution — permissive superset, but semantic not syntactic" framing. The narrative reasoned that the bot's disjoint emission was OK because zod silently drops unknown keys. It is not OK: silent drop = no-op = card never updates.
+> - The "STRATEGY_UPDATE-style escalation pattern" in the Process note (item 2 at the end of this section). That is not an escalation pattern; it is a misread of the contract.
+>
+> Treat the historical narrative below as a record of how the bug
+> got shipped, not as a current design rationale. The functional
+> outcome of v0.2.8 BEFORE the correction was that dashboard strategy
+> cards never received per-key telemetry deltas via the WS path; with
+> the correction (revert), they remain on the snapshot-hydration path
+> (initial `_build_snapshot` + future v0.2.9 telemetry pipeline).
+
 ### Background
 
 The §5.3 audit row for STRATEGY_UPDATE named exactly one emit-site
@@ -572,10 +608,17 @@ gained three STRATEGY_UPDATE assertions:
 
 A hardcoded snapshot of the dashboard's eleven-field
 `StrategyCardUpdatesSchema` is kept in the test as a comment-block
-constant `_DASH_STRATEGY_CARD_UPDATES_FIELDS`. The accompanying
-prose comment explicitly documents that the "permissive superset"
-claim is *not* asserted as a strict subset relation, because the
-relation is disjoint at the field-name level.
+constant ~~`_DASH_STRATEGY_CARD_UPDATES_FIELDS`~~ (**renamed
+2026-05-18 to `_CONTRACT_STRATEGY_UPDATE_FIELDS`** — see top-of-section
+correction block). ~~The accompanying prose comment explicitly
+documents that the "permissive superset" claim is *not* asserted as
+a strict subset relation, because the relation is disjoint at the
+field-name level.~~ **STRUCK 2026-05-18.** Post-correction, the test
+asserts the bot's `StrategyUpdateFields` field-set MATCHES the
+contract literal exactly — not as a subset, as an equality. The
+"disjoint at field-name level" claim was true of the bot's d1d2276
+emission against the contract; that disjoint-ness was the bug, not a
+designed asymmetry.
 
 ### `StrategyCardData` was reshaped in the same batch
 
@@ -607,17 +650,44 @@ existing test_routes_rest.py snapshot assertion was updated
 - A `dashboard/docs/audit/reviewer-pattern.md` ORCHESTRATOR-APPROVE
   doc-only commit lands in parallel with the bot commit, recording
   that the dashboard side is unaffected by the bot's narrow emission
-  (semantic superset confirmed by code-read, no runtime change).
+  ~~(semantic superset confirmed by code-read, no runtime change)~~.
+  **STRUCK 2026-05-18.** The "no runtime change" claim was wrong: the
+  dashboard *was* affected — the bot's narrow emission resulted in
+  zod stripping all four unknown keys and the reducer applying a `{}`
+  no-op delta to the strategy card row. The card did not update. The
+  6a6774e dashboard companion commit's actual value was in the
+  *snapshot path* (nullable telemetry fields + null-safe rendering),
+  not in the WS path. See top-of-section correction block.
 
 ### Process note (added to the FILL process note)
 
-Two escalation patterns now exist:
+Two escalation patterns exist (per the v0.2.8 post-tag correction):
+
 1. **FILL-style** — bot field's optionality reflects a real epistemic
    gap (`pnl` at fill time); dashboard schema becomes `.nullable()`.
-2. **STRATEGY_UPDATE-style** — bot's emit-site domain (runtime-config
+   This pattern is legitimate; the bot genuinely cannot supply the
+   value at emit time, and a nullable contract is the honest design.
+
+2. ~~STRATEGY_UPDATE-style — bot's emit-site domain (runtime-config
    patches) and dashboard's consumer domain (card-data partials) are
-   genuinely different even though they share a WsMessage
-   discriminant. The wire compatibility is *semantic* (zod's
-   permissive partial parsing) rather than *syntactic* (overlapping
-   field names). Document the asymmetry, snapshot both sides
-   positively, do not assert a subset relation that doesn't hold.
+   genuinely different... wire compatibility is semantic rather than
+   syntactic~~ — **STRUCK 2026-05-18.** This was a misread of the
+   contract. `STRATEGY_UPDATE.updates` is unambiguously a partial of
+   `StrategyCardData` per `BOT_CONTRACT.md:413, 609`. Asserting "semantic
+   compatibility" because zod silently drops unknown keys is rationalizing
+   a silent no-op. The correct response when the bot's emit-site
+   domain and the contract's payload domain disagree is to find the
+   right emit site (or admit it does not exist yet and defer wiring),
+   not to ship a wire-valid no-op and call it semantic compatibility.
+
+**Process note for contract-regression test discipline (v0.2.9+):**
+The schema-contract regression test in `tests/api/test_schema_contract.py`
+was supposed to catch the STRATEGY_UPDATE drift. It did not, because
+the original test snapshotted the bot's own pydantic model and
+asserted bot-against-bot. That is self-consistent with whatever the
+bot emits — including the wrong thing. The post-tag correction
+re-grounds the snapshot against the LITERAL contract text in
+`BOT_CONTRACT.md:609` (the constant `_CONTRACT_STRATEGY_UPDATE_FIELDS`
+is copy-pasted from there). For future contract-regression work:
+**always assert against the contract literal, never against the bot's
+own model.** Using the bot model to verify itself proves nothing.

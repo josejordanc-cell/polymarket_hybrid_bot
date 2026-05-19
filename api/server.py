@@ -77,16 +77,18 @@ async def run(
     emitter = Emitter()
     app[EMITTER_KEY] = emitter
 
-    # D.2.4 steps 1-3: make the Emitter reachable from
-    # utils/alerts.send_alert, utils/fills.broadcast_fill, and
-    # utils/strategy_updates.broadcast_strategy_update via module-level
-    # singletons. See d24-emit-site-audit.md §10.
+    # D.2.4 steps 1-2: make the Emitter reachable from
+    # utils/alerts.send_alert and utils/fills.broadcast_fill via
+    # module-level singletons. See d24-emit-site-audit.md §9.1, §9.2.
+    #
+    # NOTE: utils/strategy_updates also has a set_emitter helper,
+    # but no correct emit site exists in v0.2.8 (the d1d2276 wire-up
+    # was contract-nonconformant and reverted). v0.2.9 will register
+    # it here once the telemetry-pipeline emit site lands.
     from utils.alerts import set_emitter as _set_alerts_emitter
     from utils.fills import set_emitter as _set_fills_emitter
-    from utils.strategy_updates import set_emitter as _set_strategy_updates_emitter
     _set_alerts_emitter(emitter)
     _set_fills_emitter(emitter)
-    _set_strategy_updates_emitter(emitter)
 
     app[CONFIG_KEY] = config
     app.router.add_get("/ws", ws_handler)
