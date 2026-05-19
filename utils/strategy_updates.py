@@ -2,6 +2,8 @@
 utils/strategy_updates.py
 Dashboard WebSocket STRATEGY_UPDATE broadcasting infrastructure.
 
+TODO (v0.2.9): No production call sites since revert 8bad781. Re-wire when strategy-telemetry pipeline lands per .swarm-decisions.md [B-reviewer-report 2026-05-18].
+
 STATUS (v0.2.8 post-tag correction): NOT CURRENTLY WIRED to any emit
 site. An earlier version called this from
 ``api/state.py:BotState.apply_strategy_patch`` (introduced d1d2276)

@@ -34,6 +34,38 @@ INTERNAL_TO_STRATEGY_ID: dict[str, str] = {
 # Stable contract type — used everywhere a strategy ID is needed.
 StrategyId = Literal["strategy1", "strategy2", "strategy3"]
 
+
+def bot_to_dashboard(internal_name: str) -> str:
+    """Translate an internal strategy name to the dashboard contract id.
+
+    Raises ValueError if `internal_name` has no mapping (e.g. smart_money_copy,
+    which has no contract id in v1.0). Defensive — main.py's strategy gate
+    should prevent unmapped strategies from reaching the wire today, but the
+    helper must refuse rather than silently corrupt the wire shape.
+    """
+    try:
+        return INTERNAL_TO_STRATEGY_ID[internal_name]
+    except KeyError as exc:
+        raise ValueError(
+            f"No dashboard contract id for internal strategy {internal_name!r}; "
+            f"v1.0 contract supports only {sorted(INTERNAL_TO_STRATEGY_ID.keys())!r}"
+        ) from exc
+
+
+def dashboard_to_bot(contract_id: str) -> str:
+    """Translate a dashboard contract id to the internal strategy name.
+
+    Raises ValueError if `contract_id` is not one of strategy1/strategy2/strategy3.
+    """
+    try:
+        return STRATEGY_ID_TO_INTERNAL[contract_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"No internal strategy for contract id {contract_id!r}; "
+            f"v1.0 contract supports only {sorted(STRATEGY_ID_TO_INTERNAL.keys())!r}"
+        ) from exc
+
+
 # ---------------------------------------------------------------------------
 # GlobalStats
 # ---------------------------------------------------------------------------
