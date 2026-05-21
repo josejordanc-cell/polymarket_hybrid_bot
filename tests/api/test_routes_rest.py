@@ -22,7 +22,6 @@ from aiohttp.test_utils import TestClient, TestServer
 from api.routes_rest import (
     _collapse_position_id,
     _map_alert_severity,
-    _map_log_level,
     setup_routes,
 )
 from api.schemas import (
@@ -757,48 +756,9 @@ def test_open_position_wire_shape_matches_zod() -> None:
 
 
 # ---------------------------------------------------------------------------
-# TestMapLogLevel — Option C lossy map (v0.2.9 3f, audit row B.8)
+# (TestMapLogLevel moved to tests/utils/test_logs.py alongside the
+# helper's new module — v0.2.9 B.8.)
 # ---------------------------------------------------------------------------
-
-
-class TestMapLogLevel:
-    """Internal Python-logging level → wire BotLogEntry.level map.
-
-    Locked policy (Option C, Jose 2026-05-21):
-      debug    → None (drop entry)
-      info     → "INFO"
-      warning  → "WARN"
-      error    → "ERROR"
-      critical → "ERROR"   (lossy collapse to highest wire tier)
-
-    Bot NEVER emits "EXEC" — vestigial slot in the wire enum.
-    """
-
-    def test_debug_drops(self) -> None:
-        assert _map_log_level("debug") is None
-
-    def test_info_maps_to_INFO(self) -> None:
-        assert _map_log_level("info") == "INFO"
-
-    def test_warning_maps_to_WARN(self) -> None:
-        assert _map_log_level("warning") == "WARN"
-
-    def test_error_maps_to_ERROR(self) -> None:
-        assert _map_log_level("error") == "ERROR"
-
-    def test_critical_collapses_to_ERROR(self) -> None:
-        """Lossy collapse: critical → ERROR (no higher wire tier)."""
-        assert _map_log_level("critical") == "ERROR"
-
-    def test_unknown_raises(self) -> None:
-        """Unknown internal levels raise rather than silently corrupt the
-        wire enum. Mirrors _collapse_position_id's defensive policy."""
-        with pytest.raises(ValueError):
-            _map_log_level("trace")
-        with pytest.raises(ValueError):
-            _map_log_level("INFO")  # uppercase is wire-side, not internal
-        with pytest.raises(ValueError):
-            _map_log_level("")
 
 
 # ---------------------------------------------------------------------------
@@ -1404,6 +1364,203 @@ class TestInjectAlertHandler:
         resp = await test_client.post(
             "/debug/inject-alert",
             json=_inject_alert_payload(message=""),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 400
+
+
+# ---------------------------------------------------------------------------
+# TestInjectLogHandler — sim-mode-only B.8 debug endpoint
+# ---------------------------------------------------------------------------
+
+
+def _inject_log_payload(**overrides) -> dict:
+    base = {
+        "message": "smoke test log",
+        "level": "info",
+        "source": "debug-inject-test",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestInjectLogHandler:
+    """POST /debug/inject-log. Sim-mode-only debug endpoint that
+    fires utils.logs.log_to_dashboard internally so the full B.8
+    production path (state.recent_logs append; 3f Option C lossy
+    level map applied) is exercised. Mirrors inject-alert (b9-fix
+    pattern)."""
+
+    async def test_sim_mode_200_writes_state_and_returns_botlogentry(
+        self, test_client, bot_config, bot_state
+    ):
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+
+        # Response is the wire-shape BotLogEntry in canonical Zod order.
+        assert list(body.keys()) == ["id", "time", "level", "message"]
+        assert body["level"] == "INFO"  # 3f Option C: info → "INFO"
+        # source folded into message (BotLogEntry has no source field).
+        assert body["message"] == "[debug-inject-test] smoke test log"
+
+        # State-side append happened.
+        assert len(bot_state.recent_logs) == 1
+        appended = bot_state.recent_logs[0]
+        assert appended.id == body["id"]
+
+    async def test_debug_level_returns_204_no_content(
+        self, test_client, bot_config, bot_state
+    ):
+        """3f Option C: debug-tier entries are dropped from the
+        dashboard. Endpoint returns 204 No Content (intentional drop)
+        rather than 200 + empty body or 500 (which would imply error).
+        BotState.recent_logs MUST NOT grow."""
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(level="debug"),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 204
+        assert len(bot_state.recent_logs) == 0
+
+    async def test_critical_collapses_to_ERROR(
+        self, test_client, bot_config, bot_state
+    ):
+        """3f Option C: critical → ERROR (no higher wire tier).
+        Endpoint preserves this contract — caller passing
+        level='critical' sees the wire entry with level='ERROR'."""
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(level="critical"),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["level"] == "ERROR"
+
+    @pytest.mark.parametrize(
+        "internal_level,expected_wire",
+        [
+            ("info", "INFO"),
+            ("warning", "WARN"),
+            ("error", "ERROR"),
+            ("critical", "ERROR"),
+        ],
+    )
+    async def test_all_non_debug_levels_round_trip(
+        self,
+        test_client,
+        bot_config,
+        bot_state,
+        internal_level,
+        expected_wire,
+    ):
+        """The full 3f Option C non-drop subset (4 internal → 3 wire
+        values, with critical collapsing onto ERROR)."""
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(level=internal_level),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["level"] == expected_wire
+
+    async def test_inject_log_appears_in_subsequent_snapshot(
+        self, test_client, bot_config, bot_state
+    ):
+        """End-to-end runtime-smoke: inject one log, then GET
+        /dashboard/snapshot and assert it appears in body['logs']."""
+        await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(message="visible in snapshot"),
+            headers=_auth_headers(bot_config),
+        )
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert len(body["logs"]) == 1
+        assert body["logs"][0]["message"] == "[debug-inject-test] visible in snapshot"
+        assert body["logs"][0]["level"] == "INFO"
+
+    async def test_live_mode_404_before_auth(self, test_client, bot_config):
+        bot_config.runtime.mode = "live"
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(),
+            # No auth header — still 404 because the mode gate fires first.
+        )
+        assert resp.status == 404
+
+    async def test_live_mode_404_even_with_auth(self, test_client, bot_config):
+        bot_config.runtime.mode = "live"
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 404
+
+    async def test_missing_auth_401(self, test_client):
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(),
+        )
+        assert resp.status == 401
+
+    async def test_wrong_token_401(self, test_client):
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(),
+            headers={"Authorization": "Bearer wrong-token-xyz"},
+        )
+        assert resp.status == 401
+
+    async def test_invalid_json_400(self, test_client, bot_config):
+        resp = await test_client.post(
+            "/debug/inject-log",
+            data=b"not-json",
+            headers={
+                "Content-Type": "application/json",
+                **_auth_headers(bot_config),
+            },
+        )
+        assert resp.status == 400
+
+    async def test_missing_message_400(self, test_client, bot_config):
+        payload = _inject_log_payload()
+        del payload["message"]
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=payload,
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 400
+
+    async def test_invalid_level_enum_400(self, test_client, bot_config):
+        """level must be Literal["debug","info","warning","error",
+        "critical"] (internal 5-tier). Wire-side uppercase ("INFO") or
+        unknown ("trace") fails Pydantic validation with 400."""
+        for invalid in ("INFO", "WARN", "trace", "fatal"):
+            resp = await test_client.post(
+                "/debug/inject-log",
+                json=_inject_log_payload(level=invalid),
+                headers=_auth_headers(bot_config),
+            )
+            assert resp.status == 400, f"level={invalid!r} should be 400"
+
+    async def test_empty_message_400(self, test_client, bot_config):
+        resp = await test_client.post(
+            "/debug/inject-log",
+            json=_inject_log_payload(message=""),
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 400

@@ -49,38 +49,12 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
-# v0.2.9 3f (Option C, Jose 2026-05-21): internal→wire log-level map.
-# Python's standard 5-tier logging set (debug/info/warning/error/critical)
-# collapses lossy to the 4-tier dashboard enum (INFO/WARN/ERROR/EXEC).
-# `debug` is dropped entirely; `critical` collapses to ERROR (mirrors
-# the E.3 alert-severity precedent). EXEC stays in the wire enum as a
-# vestigial slot — bot NEVER produces it. See BotLogEntry docstring in
-# api/schemas.py.
-_LOG_LEVEL_MAP: dict[str, Optional[str]] = {
-    "debug": None,        # drop debug entries from the wire
-    "info": "INFO",
-    "warning": "WARN",
-    "error": "ERROR",
-    "critical": "ERROR",  # lossy collapse to highest wire tier
-}
-
-
-def _map_log_level(internal: str) -> Optional[str]:
-    """Map a Python-logging level (lowercase) to the wire BotLogEntry
-    ``level`` enum literal, or ``None`` to drop the entry.
-
-    Raises ``ValueError`` on unknown levels — silent corruption of the
-    wire enum would be harder to debug than a surfaced exception at the
-    boundary. Mirrors the defensive policy used by
-    ``_collapse_position_id``.
-    """
-    try:
-        return _LOG_LEVEL_MAP[internal]
-    except KeyError as exc:
-        raise ValueError(
-            f"Unknown internal log level {internal!r}; "
-            f"expected one of {sorted(_LOG_LEVEL_MAP.keys())!r}"
-        ) from exc
+# v0.2.9 B.8 wiring: the log-level map + _map_log_level helper that
+# used to live here (from 3f speculative landing) have moved to
+# ``utils/logs.py`` alongside ``log_to_dashboard`` — their natural
+# home now that the broadcast site exists. Single source of truth.
+# New code imports directly from utils.logs; tests for the helper
+# live next to its new module (tests/utils/test_logs.py).
 
 
 # v0.2.9 3f (E.3 collapse, Jose 2026-05-21): internal→wire alert-severity
@@ -305,20 +279,16 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         equity=[],          # OQ-3 stub — TODO(B.7-wiring)
         monthlyPnl=[],      # OQ-3 stub
         backtest=[],        # OQ-3 stub
-        # logs: stays as `[]` OQ-3 stub. v0.2.9 3f established the
-        # canonical 4-field BotLogEntry shape (id, time, level, message)
-        # with the 5→4 tier lossy map locked as Option C. When the log-
-        # tap pipeline lands (B.8-wiring), build each entry inline as:
-        #   wire_level = _map_log_level(internal_entry.level.lower())
-        #   if wire_level is None:   # debug — drop
-        #       continue
-        #   BotLogEntry(id=internal_entry.id,
-        #               time=internal_entry.timestamp.strftime("%H:%M:%S"),
-        #               level=wire_level,
-        #               message=internal_entry.message)
-        # Bot NEVER emits "EXEC"; that vestigial slot is for future
-        # B.1-fill-runtime reconsideration.
-        logs=[],            # OQ-3 stub — TODO(B.8-wiring)
+        # logs: v0.2.9 B.8 wires this live. Wire-shape BotLogEntry
+        # instances are appended to BotState.recent_logs by
+        # utils.logs.log_to_dashboard (the explicit-opt-in helper —
+        # PATH A per the B.8 design decision). The 5→4 tier lossy
+        # map (3f Option C) is applied INSIDE log_to_dashboard, so
+        # everything reaching recent_logs is already wire-canonical;
+        # the snapshot just lists the deque. Mirrors the
+        # fills=list(snap.recent_fills) and
+        # alerts=list(snap.recent_alerts) patterns.
+        logs=list(snap.recent_logs),
         # alerts: v0.2.9 B.9 wires this live. Wire-shape AlertItem
         # instances are appended to BotState.recent_alerts by
         # utils.alerts._broadcast_dashboard (see send_alert path), so
@@ -697,6 +667,132 @@ async def inject_alert_handler(
 
 
 # ---------------------------------------------------------------------------
+# /debug/inject-log (v0.2.9 B.8; sim-mode only)
+# ---------------------------------------------------------------------------
+#
+# Runtime-smoke companion to /debug/inject-alert. Fires
+# ``utils.logs.log_to_dashboard`` on demand so the full B.8 production
+# path (state.recent_logs append, with 3f Option C lossy level map
+# applied inside) is exercisable via curl. Snapshot reads recent_logs
+# directly, so a subsequent GET /dashboard/snapshot shows the entry.
+#
+# NO WS broadcast — Zod WsMessageSchema has no LOG variant today
+# (components/dashboard/schemas.ts:226); the snapshot is the only
+# transport. If LOG WS frames are added later, the endpoint inherits
+# the broadcast automatically (log_to_dashboard adds the path).
+#
+# Security gates identical to /debug/inject-alert + /debug/inject-
+# position (3h + b9-fix precedent):
+#   1. Sim-mode 404 BEFORE auth (endpoint absent on live deployments)
+#   2. Bearer auth required
+#   3. State-side append happens under state.write_lock (inside
+#      log_to_dashboard)
+#   4. INFO log on successful injection (audit trail)
+#   5. Pydantic InjectLogPayload validation rejects malformed input
+#      with 400 (NOT 422 — matches inject-position/alert convention)
+# ---------------------------------------------------------------------------
+
+
+class InjectLogPayload(BaseModel):
+    """Request body for POST /debug/inject-log.
+
+    Three fields mirroring ``utils.logs.log_to_dashboard``'s public
+    signature. ``id`` and ``time`` are computed inside log_to_dashboard;
+    the caller does NOT supply them.
+
+    ``level`` accepts the INTERNAL 5-tier vocabulary (debug/info/warning/
+    error/critical) — NOT the wire-side 4-tier enum (INFO/WARN/ERROR/
+    EXEC). log_to_dashboard applies the 3f Option C lossy map at the
+    boundary (debug → DROP, critical → ERROR, etc.). Documents this so
+    curl-callers don't accidentally pass wire-form uppercase.
+    """
+
+    message: str = Field(min_length=1)
+    level: Literal["debug", "info", "warning", "error", "critical"] = "info"
+    source: str = Field(default="debug-inject", min_length=1)
+
+
+async def inject_log_handler(
+    request: web.Request, state: BotState, config: Any
+) -> web.Response:
+    """POST /debug/inject-log — sim-mode-only debug helper.
+
+    Fires ``utils.logs.log_to_dashboard``. The B.8 wiring applies the
+    3f Option C lossy level map, builds a wire-shape BotLogEntry, and
+    appends to BotState.recent_logs under write_lock.
+
+    Special-case response: when the caller passes ``level="debug"``,
+    log_to_dashboard intentionally DROPS the entry (debug tier is
+    below the wire noise floor). The endpoint returns 204 No Content
+    in that case so callers can observe the drop without thinking the
+    request errored. All other levels → 200 with the BotLogEntry body.
+    """
+    # Security gate 1: 404 in non-sim mode (BEFORE auth — see 3h
+    # precedent). _verify_debug_mode walks config.runtime.mode.
+    if not _verify_debug_mode(config):
+        return web.Response(status=404, text="Not Found")
+
+    # Security gate 2: Bearer auth.
+    if not verify_bearer(request.headers, config):
+        return web.Response(status=401, text="Unauthorized")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text="Invalid JSON")
+
+    try:
+        req = InjectLogPayload.model_validate(body)
+    except ValidationError as exc:
+        return web.Response(status=400, text=str(exc))
+
+    pre_len = len(state.recent_logs)
+
+    from utils.logs import log_to_dashboard as _log_to_dashboard
+
+    await _log_to_dashboard(req.message, level=req.level, source=req.source)
+
+    if len(state.recent_logs) <= pre_len:
+        # log_to_dashboard intentionally dropped the entry — either
+        # the debug-tier drop (3f Option C) or no BotState was
+        # registered. The latter shouldn't happen in production
+        # wiring; the former is expected behavior for level="debug".
+        if req.level == "debug":
+            # Explicit 204: caller asked for a debug log, dashboard
+            # doesn't surface debug. Return No Content so the caller
+            # can verify the drop.
+            logger.info(
+                "debug_log_dropped_per_policy",
+                level=req.level,
+                source=req.source,
+            )
+            return web.Response(status=204)
+        # Anything else: log_to_dashboard no-op'd unexpectedly (state
+        # singleton not registered). Surface explicitly rather than
+        # returning stale data.
+        return web.Response(
+            status=500,
+            text=(
+                "log_to_dashboard did not append to BotState.recent_logs — "
+                "is api.state.set_state wired at startup?"
+            ),
+        )
+
+    entry = state.recent_logs[-1]
+
+    logger.info(
+        "debug_log_injected",
+        message=req.message,
+        level=req.level,
+        source=req.source,
+        log_id=entry.id,
+        wire_level=entry.level,
+    )
+
+    return web.json_response(entry.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
 # Closure factory + route registration
 # ---------------------------------------------------------------------------
 
@@ -744,4 +840,13 @@ def setup_routes(app: web.Application, state: BotState, config: Any) -> None:
     app.router.add_post(
         "/debug/inject-alert",
         _make_handler(inject_alert_handler, state, config),
+    )
+    # v0.2.9 B.8: logs runtime-smoke companion. Same 404-gate +
+    # Bearer-auth surface; uses log_to_dashboard internally so the
+    # 3f Option C lossy level map is applied. Returns 204 No Content
+    # when level="debug" (intentional drop per policy); 200 + body
+    # otherwise.
+    app.router.add_post(
+        "/debug/inject-log",
+        _make_handler(inject_log_handler, state, config),
     )
