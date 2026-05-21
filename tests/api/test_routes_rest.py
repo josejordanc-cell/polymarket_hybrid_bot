@@ -17,7 +17,12 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from api.routes_rest import _collapse_position_id, setup_routes
+from api.routes_rest import (
+    _collapse_position_id,
+    _map_alert_severity,
+    _map_log_level,
+    setup_routes,
+)
 from api.schemas import (
     DashboardSnapshot,
     OpenPosition,
@@ -735,3 +740,91 @@ def test_open_position_wire_shape_matches_zod() -> None:
 
     # 6. currentPrice == entryPrice (stopgap: mark trivially equals entry).
     assert data["currentPrice"] == data["entryPrice"]
+
+
+# ---------------------------------------------------------------------------
+# TestMapLogLevel — Option C lossy map (v0.2.9 3f, audit row B.8)
+# ---------------------------------------------------------------------------
+
+
+class TestMapLogLevel:
+    """Internal Python-logging level → wire BotLogEntry.level map.
+
+    Locked policy (Option C, Jose 2026-05-21):
+      debug    → None (drop entry)
+      info     → "INFO"
+      warning  → "WARN"
+      error    → "ERROR"
+      critical → "ERROR"   (lossy collapse to highest wire tier)
+
+    Bot NEVER emits "EXEC" — vestigial slot in the wire enum.
+    """
+
+    def test_debug_drops(self) -> None:
+        assert _map_log_level("debug") is None
+
+    def test_info_maps_to_INFO(self) -> None:
+        assert _map_log_level("info") == "INFO"
+
+    def test_warning_maps_to_WARN(self) -> None:
+        assert _map_log_level("warning") == "WARN"
+
+    def test_error_maps_to_ERROR(self) -> None:
+        assert _map_log_level("error") == "ERROR"
+
+    def test_critical_collapses_to_ERROR(self) -> None:
+        """Lossy collapse: critical → ERROR (no higher wire tier)."""
+        assert _map_log_level("critical") == "ERROR"
+
+    def test_unknown_raises(self) -> None:
+        """Unknown internal levels raise rather than silently corrupt the
+        wire enum. Mirrors _collapse_position_id's defensive policy."""
+        with pytest.raises(ValueError):
+            _map_log_level("trace")
+        with pytest.raises(ValueError):
+            _map_log_level("INFO")  # uppercase is wire-side, not internal
+        with pytest.raises(ValueError):
+            _map_log_level("")
+
+
+# ---------------------------------------------------------------------------
+# TestMapAlertSeverity — E.3 collapse (v0.2.9 3f, audit row B.9)
+# ---------------------------------------------------------------------------
+
+
+class TestMapAlertSeverity:
+    """Internal severity → wire AlertItem.severity map.
+
+    Locked policy (E.3 collapse, Jose 2026-05-21):
+      debug    → None (drop entry)
+      info     → "info"
+      warning  → "warning"
+      error    → "critical"   (E.3 collapse to highest wire tier)
+      critical → "critical"
+    """
+
+    def test_debug_drops(self) -> None:
+        assert _map_alert_severity("debug") is None
+
+    def test_info_maps_to_info(self) -> None:
+        assert _map_alert_severity("info") == "info"
+
+    def test_warning_maps_to_warning(self) -> None:
+        assert _map_alert_severity("warning") == "warning"
+
+    def test_error_collapses_to_critical(self) -> None:
+        """E.3: internal error → wire critical (no separate error tier)."""
+        assert _map_alert_severity("error") == "critical"
+
+    def test_critical_maps_to_critical(self) -> None:
+        assert _map_alert_severity("critical") == "critical"
+
+    def test_unknown_raises(self) -> None:
+        """Unknown internal severities raise rather than silently corrupt
+        the wire enum."""
+        with pytest.raises(ValueError):
+            _map_alert_severity("notice")
+        with pytest.raises(ValueError):
+            _map_alert_severity("INFO")  # uppercase wrong; this is wire-side
+        with pytest.raises(ValueError):
+            _map_alert_severity("")

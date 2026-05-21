@@ -18,7 +18,7 @@ file deliberately contains no WS-shaped code.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Optional
 
 import structlog
 from aiohttp import web
@@ -41,6 +41,67 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Wire-shape helpers
 # ---------------------------------------------------------------------------
+
+
+# v0.2.9 3f (Option C, Jose 2026-05-21): internal→wire log-level map.
+# Python's standard 5-tier logging set (debug/info/warning/error/critical)
+# collapses lossy to the 4-tier dashboard enum (INFO/WARN/ERROR/EXEC).
+# `debug` is dropped entirely; `critical` collapses to ERROR (mirrors
+# the E.3 alert-severity precedent). EXEC stays in the wire enum as a
+# vestigial slot — bot NEVER produces it. See BotLogEntry docstring in
+# api/schemas.py.
+_LOG_LEVEL_MAP: dict[str, Optional[str]] = {
+    "debug": None,        # drop debug entries from the wire
+    "info": "INFO",
+    "warning": "WARN",
+    "error": "ERROR",
+    "critical": "ERROR",  # lossy collapse to highest wire tier
+}
+
+
+def _map_log_level(internal: str) -> Optional[str]:
+    """Map a Python-logging level (lowercase) to the wire BotLogEntry
+    ``level`` enum literal, or ``None`` to drop the entry.
+
+    Raises ``ValueError`` on unknown levels — silent corruption of the
+    wire enum would be harder to debug than a surfaced exception at the
+    boundary. Mirrors the defensive policy used by
+    ``_collapse_position_id``.
+    """
+    try:
+        return _LOG_LEVEL_MAP[internal]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown internal log level {internal!r}; "
+            f"expected one of {sorted(_LOG_LEVEL_MAP.keys())!r}"
+        ) from exc
+
+
+# v0.2.9 3f (E.3 collapse, Jose 2026-05-21): internal→wire alert-severity
+# map. Same drop-debug / collapse-error pattern as the log-level map.
+_ALERT_SEVERITY_MAP: dict[str, Optional[str]] = {
+    "debug": None,           # drop debug alerts from the wire
+    "info": "info",
+    "warning": "warning",
+    "error": "critical",     # E.3 collapse to highest wire tier
+    "critical": "critical",
+}
+
+
+def _map_alert_severity(internal: str) -> Optional[str]:
+    """Map an internal alert severity (lowercase) to the wire AlertItem
+    ``severity`` enum literal, or ``None`` to drop the entry.
+
+    Raises ``ValueError`` on unknown severities — same defensive policy
+    as ``_map_log_level``.
+    """
+    try:
+        return _ALERT_SEVERITY_MAP[internal]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown internal alert severity {internal!r}; "
+            f"expected one of {sorted(_ALERT_SEVERITY_MAP.keys())!r}"
+        ) from exc
 
 
 def _collapse_position_id(pos: Any) -> str:
@@ -199,11 +260,42 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         # fields land with B.5 full wiring (equity-history + mark-
         # pricing pipelines).
         risk=RiskMetrics(),
-        equity=[],          # OQ-3 stub
+        # equity: stays as `[]` OQ-3 stub. v0.2.9 3f established the
+        # canonical 3-field EquityPoint shape (day, equity, pnl). When
+        # the equity-history pipeline lands (B.7-wiring), build each
+        # point inline here as:
+        #   EquityPoint(day=pt.date.isoformat(),  # "YYYY-MM-DD"
+        #               equity=pt.equity,
+        #               pnl=pt.pnl)
+        # No internal source today — BotState.equity_history is also a
+        # stub `[]`. See EquityPoint docstring in api/schemas.py.
+        equity=[],          # OQ-3 stub — TODO(B.7-wiring)
         monthlyPnl=[],      # OQ-3 stub
         backtest=[],        # OQ-3 stub
-        logs=[],            # OQ-3 stub
-        alerts=[],          # OQ-3 stub
+        # logs: stays as `[]` OQ-3 stub. v0.2.9 3f established the
+        # canonical 4-field BotLogEntry shape (id, time, level, message)
+        # with the 5→4 tier lossy map locked as Option C. When the log-
+        # tap pipeline lands (B.8-wiring), build each entry inline as:
+        #   wire_level = _map_log_level(internal_entry.level.lower())
+        #   if wire_level is None:   # debug — drop
+        #       continue
+        #   BotLogEntry(id=internal_entry.id,
+        #               time=internal_entry.timestamp.strftime("%H:%M:%S"),
+        #               level=wire_level,
+        #               message=internal_entry.message)
+        # Bot NEVER emits "EXEC"; that vestigial slot is for future
+        # B.1-fill-runtime reconsideration.
+        logs=[],            # OQ-3 stub — TODO(B.8-wiring)
+        # alerts: stays as `[]` OQ-3 stub. AlertItem schema was already
+        # canonical pre-3f; only the severity-collapse helper changed.
+        # When the alert pipeline lands (B.9-wiring), build each entry as:
+        #   wire_sev = _map_alert_severity(internal_alert.severity.lower())
+        #   if wire_sev is None:   # debug — drop
+        #       continue
+        #   AlertItem(id=..., time=..., severity=wire_sev,
+        #             source=..., message=...)
+        # E.3 collapse: internal error→critical at the boundary.
+        alerts=[],          # OQ-3 stub — TODO(B.9-wiring)
     )
 
 

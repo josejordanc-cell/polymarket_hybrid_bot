@@ -9,7 +9,10 @@ import pytest
 from pydantic import ValidationError
 
 from api.schemas import (
+    AlertItem,
+    BotLogEntry,
     DashboardSnapshot,
+    EquityPoint,
     FillRecord,
     GlobalStats,
     OpenPosition,
@@ -768,3 +771,236 @@ def test_dashboard_to_bot_strategy4_raises() -> None:
 def test_round_trip_identity(internal_name: str) -> None:
     """dashboard_to_bot(bot_to_dashboard(x)) == x for all three mapped names."""
     assert dashboard_to_bot(bot_to_dashboard(internal_name)) == internal_name
+
+
+# ---------------------------------------------------------------------------
+# Section: EquityPoint (v0.2.9 3f — audit row B.7)
+# ---------------------------------------------------------------------------
+
+
+def test_equitypoint_default_shape() -> None:
+    """v0.2.9 3f: canonical 3-field Zod shape per
+    components/dashboard/schemas.ts:22 + BOT_CONTRACT.md v1.0 line 597.
+    Exact key order: day, equity, pnl."""
+    pt = EquityPoint(day="2026-05-21", equity=10250.50, pnl=125.50)
+    data = pt.model_dump(mode="json")
+    assert list(data.keys()) == ["day", "equity", "pnl"]
+    assert data["day"] == "2026-05-21"
+    assert data["equity"] == 10250.50
+    assert data["pnl"] == 125.50
+    assert isinstance(data["day"], str)
+    assert isinstance(data["equity"], float)
+    assert isinstance(data["pnl"], float)
+
+
+def test_equitypoint_round_trip() -> None:
+    pt = EquityPoint(day="2026-05-21", equity=10000.0, pnl=0.0)
+    data = pt.model_dump(mode="json")
+    pt2 = EquityPoint.model_validate(data)
+    assert pt2.day == pt.day
+    assert pt2.equity == pt.equity
+    assert pt2.pnl == pt.pnl
+
+
+def test_equitypoint_rejects_legacy_ts_field() -> None:
+    """v0.2.9 3f: the prior (ts: int, equity: float) shape was wrong.
+    Per pydantic v2 default extras-ignore policy, ``ts=`` is silently
+    dropped — construction fails because ``day`` and ``pnl`` are
+    missing required fields."""
+    with pytest.raises(ValidationError):
+        EquityPoint(
+            ts=1700000000000,    # legacy key — silently dropped
+            equity=10000.0,
+            # day + pnl omitted → ValidationError
+        )
+
+    # When all 3 canonical fields are present, ts= is silently dropped
+    # and construction succeeds; ts must NOT appear in the dumped payload.
+    pt = EquityPoint(
+        ts=1700000000000,        # legacy key — silently dropped
+        day="2026-05-21",
+        equity=10000.0,
+        pnl=0.0,
+    )
+    data = pt.model_dump()
+    assert "ts" not in data
+
+
+# ---------------------------------------------------------------------------
+# Section: BotLogEntry (v0.2.9 3f — audit row B.8 / Option C lossy map)
+# ---------------------------------------------------------------------------
+
+
+def test_botlogentry_default_shape() -> None:
+    """v0.2.9 3f: canonical 4-field Zod shape per
+    components/dashboard/schemas.ts:110 + BOT_CONTRACT.md v1.0 line 123.
+    Exact key order: id, time, level, message."""
+    entry = BotLogEntry(
+        id="log-001",
+        time="16:30:00",
+        level="INFO",
+        message="bot started",
+    )
+    data = entry.model_dump(mode="json")
+    assert list(data.keys()) == ["id", "time", "level", "message"]
+    assert data["id"] == "log-001"
+    assert data["time"] == "16:30:00"
+    assert data["level"] == "INFO"
+    assert data["message"] == "bot started"
+
+
+def test_botlogentry_round_trip() -> None:
+    entry = BotLogEntry(
+        id="log-042",
+        time="17:01:33",
+        level="WARN",
+        message="something noteworthy",
+    )
+    data = entry.model_dump(mode="json")
+    entry2 = BotLogEntry.model_validate(data)
+    assert entry2.id == entry.id
+    assert entry2.time == entry.time
+    assert entry2.level == entry.level
+    assert entry2.message == entry.message
+
+
+def test_botlogentry_level_enum() -> None:
+    """v0.2.9 3f Option C: level is uppercase 4-tier
+    Literal["INFO","WARN","ERROR","EXEC"]. Lowercase Python-logging
+    values (debug/info/warning/error/critical) are NOT accepted at the
+    Pydantic layer — those are internal-side and pass through
+    _map_log_level in api/routes_rest.py before wire-construction.
+
+    Bot NEVER produces "EXEC" today (vestigial slot), but the Pydantic
+    model accepts it so future test fixtures or schema validators can
+    construct it without bypass."""
+    # Accept all four canonical wire literals.
+    for level in ("INFO", "WARN", "ERROR", "EXEC"):
+        entry = BotLogEntry(
+            id="log-x",
+            time="00:00:00",
+            level=level,
+            message="x",
+        )
+        assert entry.level == level
+
+    # Reject lowercase Python-logging tier (these flow through
+    # _map_log_level upstream of the model).
+    for invalid in ("info", "warning", "error", "critical", "debug",
+                    "Info", "DEBUG"):
+        with pytest.raises(ValidationError):
+            BotLogEntry(
+                id="log-bad",
+                time="00:00:00",
+                level=invalid,  # type: ignore[arg-type]
+                message="x",
+            )
+
+    # Reject unknown literals.
+    with pytest.raises(ValidationError):
+        BotLogEntry(
+            id="log-bad",
+            time="00:00:00",
+            level="TRACE",  # type: ignore[arg-type]
+            message="x",
+        )
+
+
+def test_botlogentry_rejects_legacy_fields() -> None:
+    """v0.2.9 3f: the prior bot model had (ts: int, level: lowercase,
+    message: str, context: Optional[dict]). The new shape drops ``ts``
+    (replaced by ``time: str``) and ``context`` (no wire equivalent).
+    Pydantic v2 extras-ignore drops legacy kwargs silently — construction
+    fails because the new required fields are missing."""
+    with pytest.raises(ValidationError):
+        BotLogEntry(
+            ts=1700000000000,          # legacy key — silently dropped
+            level="info",                # legacy lowercase — also wrong shape
+            message="x",
+            context={"k": "v"},          # legacy key — silently dropped
+            # id + time + uppercase level all missing → ValidationError
+        )
+
+
+# ---------------------------------------------------------------------------
+# Section: AlertItem (v0.2.9 3f — audit row B.9 / E.3 severity collapse)
+# ---------------------------------------------------------------------------
+
+
+def test_alertitem_default_shape() -> None:
+    """v0.2.9 3f: canonical 5-field Zod shape per
+    components/dashboard/schemas.ts:174 + BOT_CONTRACT.md v1.0 line 125.
+    Exact key order: id, time, severity, source, message. (Schema was
+    already aligned pre-3f; docstring updated for severity-collapse
+    policy.)"""
+    alert = AlertItem(
+        id="alert-001",
+        time="16:30:00",
+        severity="warning",
+        source="risk_manager",
+        message="drawdown nearing limit",
+    )
+    data = alert.model_dump(mode="json")
+    assert list(data.keys()) == ["id", "time", "severity", "source", "message"]
+    assert data["id"] == "alert-001"
+    assert data["time"] == "16:30:00"
+    assert data["severity"] == "warning"
+    assert data["source"] == "risk_manager"
+    assert data["message"] == "drawdown nearing limit"
+
+
+def test_alertitem_round_trip() -> None:
+    alert = AlertItem(
+        id="alert-002",
+        time="17:00:00",
+        severity="critical",
+        source="kill_switch",
+        message="daily drawdown limit breached",
+    )
+    data = alert.model_dump(mode="json")
+    alert2 = AlertItem.model_validate(data)
+    assert alert2.id == alert.id
+    assert alert2.time == alert.time
+    assert alert2.severity == alert.severity
+    assert alert2.source == alert.source
+    assert alert2.message == alert.message
+
+
+def test_alertitem_severity_enum() -> None:
+    """v0.2.9 3f E.3 collapse: severity is lowercase 3-tier
+    Literal["info","warning","critical"]. Internal "error" tier
+    collapses to "critical" via _map_alert_severity upstream of the
+    Pydantic layer; "debug" is dropped entirely."""
+    # Accept all three canonical wire literals.
+    for sev in ("info", "warning", "critical"):
+        alert = AlertItem(
+            id="x",
+            time="00:00:00",
+            severity=sev,
+            source="x",
+            message="x",
+        )
+        assert alert.severity == sev
+
+    # Reject uppercase (those are BotLogEntry levels, not AlertItem
+    # severities — the two enums collide in casing).
+    with pytest.raises(ValidationError):
+        AlertItem(
+            id="x",
+            time="00:00:00",
+            severity="INFO",  # type: ignore[arg-type]
+            source="x",
+            message="x",
+        )
+
+    # Reject internal-tier values that flow through _map_alert_severity
+    # upstream of the model.
+    for invalid in ("error", "debug", "ERROR", "Critical"):
+        with pytest.raises(ValidationError):
+            AlertItem(
+                id="x",
+                time="00:00:00",
+                severity=invalid,  # type: ignore[arg-type]
+                source="x",
+                message="x",
+            )

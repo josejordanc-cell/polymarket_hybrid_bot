@@ -330,12 +330,50 @@ class StrategyConfigPatch(BaseModel):
 
 
 class BotLogEntry(BaseModel):
-    """Mirrors BotLogEntrySchema."""
+    """Mirrors dashboard BotLogEntrySchema — canonical Zod source at
+    ``components/dashboard/schemas.ts:110`` + ``BOT_CONTRACT.md`` v1.0
+    line 123. Four fields, all required, in wire order.
 
-    ts: int  # epoch ms
-    level: Literal["debug", "info", "warning", "error", "critical"]
+    v0.2.9 sub-phase 3f correction. Prior bot model used 5-tier
+    lowercase Python logging levels plus a ``context`` extras dict
+    plus an epoch-ms ``ts`` integer — none of those matched the wire
+    contract. Team A's A-3 report flagged this as the level-enum
+    cross-team L2 (locked by Jose as Option C below).
+
+    Wire fields (Zod order):
+
+    - ``id``      — per-log-entry stable identifier.
+    - ``time``    — string. Bot convention: ``"HH:MM:SS"`` matching
+      ``FillRecord.time`` and ``AlertItem.time`` precedent. Zod accepts
+      any string.
+    - ``level``   — Literal["INFO", "WARN", "ERROR", "EXEC"].
+    - ``message`` — free string.
+
+    **Locked policy (Option C, Jose 2026-05-21) — internal→wire level map:**
+
+      debug    → DROP (entry excluded from wire ``logs`` list)
+      info     → "INFO"
+      warning  → "WARN"
+      error    → "ERROR"
+      critical → "ERROR"   (lossy collapse; ERROR is the highest wire tier)
+
+    The collapse lives in
+    ``api/routes_rest.py:_map_log_level``. Bot NEVER ships ``"EXEC"`` —
+    that literal is preserved in the Zod enum as a vestigial/tolerated
+    slot (originally a category mistake; EXEC isn't a severity). When
+    B.1 fill runtime lands and fills get their own dashboard slice, we
+    revisit deprecating EXEC. TODO(B.1-fills): EXEC slot revisit.
+
+    The ``context: Optional[dict]`` field from the prior bot model is
+    deliberately dropped — Zod has no such field. If structured context
+    is needed in the future, encode it into ``message`` or add a
+    cross-team contract change.
+    """
+
+    id: str
+    time: str  # bot convention: "HH:MM:SS"; Zod accepts any string
+    level: Literal["INFO", "WARN", "ERROR", "EXEC"]
     message: str
-    context: Optional[dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -344,10 +382,42 @@ class BotLogEntry(BaseModel):
 
 
 class AlertItem(BaseModel):
-    """Mirrors dashboard AlertItemSchema. See docs/audit/d24-emit-site-audit.md §10."""
+    """Mirrors dashboard AlertItemSchema — canonical Zod source at
+    ``components/dashboard/schemas.ts:174`` + ``BOT_CONTRACT.md`` v1.0
+    line 125. Five fields, all required, in wire order.
+
+    v0.2.9 sub-phase 3f: schema was already aligned (verified ALIGNED
+    in the A-3 reconciliation matrix); docstring updated to document
+    the locked severity-collapse policy for the serializer side.
+
+    Wire fields (Zod order):
+
+    - ``id``       — per-alert stable identifier.
+    - ``time``     — string. Bot convention: ``"HH:MM:SS"``.
+    - ``severity`` — Literal["info", "warning", "critical"] — lowercase
+      3-tier per Zod.
+    - ``source``   — free string identifying the alert source.
+    - ``message``  — free string.
+
+    **Locked policy (E.3 collapse, Jose 2026-05-21) — internal→wire
+    severity map:**
+
+      debug    → DROP (entry excluded from wire ``alerts`` list)
+      info     → "info"
+      warning  → "warning"
+      error    → "critical"   (E.3 collapse; ``critical`` is the
+                              highest wire tier)
+      critical → "critical"
+
+    The collapse lives in
+    ``api/routes_rest.py:_map_alert_severity``. Mirrors the same
+    drop-debug / collapse-error pattern used by ``BotLogEntry`` —
+    no information lost beyond the debug-tier filter that's already
+    absent from the wire-side enum.
+    """
 
     id: str
-    time: str  # "HH:MM:SS" per dashboard handoff §6.3
+    time: str  # bot convention: "HH:MM:SS" per dashboard handoff §6.3
     severity: Literal["info", "warning", "critical"]
     source: str
     message: str
@@ -359,10 +429,30 @@ class AlertItem(BaseModel):
 
 
 class EquityPoint(BaseModel):
-    """Mirrors EquityPointSchema.  Used for the equity history sparkline."""
+    """Mirrors dashboard EquityPointSchema — canonical Zod source at
+    ``components/dashboard/schemas.ts:22`` + ``BOT_CONTRACT.md`` v1.0
+    line 597. Three fields, all required, in wire order.
 
-    ts: int  # epoch ms
+    v0.2.9 sub-phase 3f correction. Prior bot model had two fields
+    ``(ts: int, equity: float)`` — wrong field name, wrong type (epoch
+    ms int vs calendar-day string), missing ``pnl``. A-3 reconciliation
+    matrix flagged the field set; this commit aligns the model.
+
+    Wire fields (Zod order):
+
+    - ``day``    — calendar-day string. Bot convention:
+      ``"YYYY-MM-DD"`` (ISO 8601 date) mirroring ``MonthlyPnl.month``'s
+      ``"YYYY-MM"`` precedent. Zod accepts any string; bot picks the
+      consistent format.
+    - ``equity`` — number. Equity-curve point value in USD.
+    - ``pnl``    — number. PnL delta vs. previous point (or vs.
+      day-start, per B.7-wiring decision when production population
+      lands).
+    """
+
+    day: str  # bot convention: "YYYY-MM-DD" ISO 8601 date
     equity: float
+    pnl: float
 
 
 # ---------------------------------------------------------------------------
