@@ -105,8 +105,18 @@ class TestSnapshotHandler:
         assert gs["winRate"] == 0.0
         assert gs["totalTrades"] == 0
         assert gs["streak"] == 0
-        # lastUpdatedAt moved from snapshot root into globalStats per A.2
+        # lastUpdatedAt moved from snapshot root into globalStats per A.2.
+        # v0.2.9 3d-pre: must be a live epoch-ms timestamp (positive int,
+        # within ~1s of "now"), not the 0 sentinel that defaulted from
+        # BotState.last_updated_at_ms before the strategy loop wires a fill.
+        # Dashboard's refreshDashboard.ts stale-snapshot gate compares
+        # incomingTs ≤ storedTs (BOT_CONTRACT.md v1.0 line 186); 0 always
+        # loses against the portfolioStore seed (Date.now()).
+        import time as _time
+        now_ms = int(_time.time() * 1000)
         assert isinstance(gs["lastUpdatedAt"], int)
+        assert gs["lastUpdatedAt"] > 0
+        assert now_ms - 1000 <= gs["lastUpdatedAt"] <= now_ms + 1000
         assert "lastUpdatedAt" not in body
         # Removed fields must not appear
         assert "totalEquity" not in gs
@@ -146,10 +156,35 @@ class TestSnapshotHandler:
         assert ids == {"strategy1", "strategy2", "strategy3"}
         for cfg in configs:
             assert cfg["maxPositionSize"] == 100.0
+            # v0.2.9 3d-pre: activePairs ships [] not null when no pairs
+            # are configured (BOT_CONTRACT.md v1.0 line 121).
+            assert cfg["activePairs"] == []
+            assert isinstance(cfg["activePairs"], list)
             assert cfg["riskPct"] == 2.5
             # Removed/renamed fields must not appear
             assert "id" not in cfg
             assert "riskBudget" not in cfg
+
+    async def test_snapshot_strategy_configs_active_pairs_never_null(
+        self, test_client, bot_config
+    ):
+        """v0.2.9 3d-pre: dedicated guard against the activePairs:null
+        regression. Every strategyConfig in the wire payload must have
+        activePairs as a list (possibly empty) — never null. Dashboard
+        Zod (z.array(...) required, not nullable, BOT_CONTRACT.md v1.0
+        line 121) silently rejects rows where activePairs is null,
+        which caused the strategy panel to fall back to mocks during
+        joint smoke #1."""
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert all(
+            isinstance(c["activePairs"], list)
+            for c in body["strategyConfigs"]
+        )
+        assert all(c["activePairs"] is not None for c in body["strategyConfigs"])
 
     async def test_snapshot_body_recent_fills_two_entries(self, test_client, bot_config):
         resp = await test_client.get(

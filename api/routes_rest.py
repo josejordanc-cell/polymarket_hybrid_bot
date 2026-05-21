@@ -114,7 +114,15 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
             winRate=0.0,             # OQ-3 stub — pipeline not wired
             totalTrades=0,           # OQ-3 stub — pipeline not wired
             streak=0,                # OQ-3 stub — pipeline not wired
-            lastUpdatedAt=snap.last_updated_at_ms,
+            # v0.2.9 3d-pre fix: ship live epoch ms, not snap.last_updated_at_ms
+            # (which sits at 0 until a fill/heartbeat lands). Dashboard's
+            # refreshDashboard.ts stale-snapshot gate (BOT_CONTRACT.md v1.0
+            # line 186) compares incomingTs <= storedTs; a literal 0
+            # always loses against the portfolioStore seed (Date.now()),
+            # causing every snapshot to merge-as-stale → silent mock
+            # fallback. int(time.time() * 1000) satisfies the monotonic-
+            # increasing requirement at snapshot build time.
+            lastUpdatedAt=int(time.time() * 1000),
         ),
         strategies=[
             StrategyCardData(
@@ -137,7 +145,17 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
             )
         ],
         strategyConfigs=[
-            cfg.to_contract()
+            # v0.2.9 3d-pre fix: activePairs ships [] not null when no
+            # pairs are configured. Dashboard Zod (BOT_CONTRACT.md v1.0
+            # line 121) requires z.array(...) NOT nullable — null caused
+            # every config row to be silently rejected. Fix at the
+            # serializer site by overriding activePairs to [] when the
+            # source is None. StrategyRuntimeConfig.to_contract() still
+            # propagates None for internal callers; only the wire
+            # representation is coerced.
+            cfg.to_contract().model_copy(
+                update={"activePairs": cfg.activePairs or []}
+            )
             for cfg in (
                 snap.strategy_configs[k]
                 for k in ("strategy1", "strategy2", "strategy3")
