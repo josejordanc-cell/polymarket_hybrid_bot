@@ -29,6 +29,11 @@ def bot_config() -> MagicMock:
     config.http_api.ws_ticket_secret.get_secret_value.return_value = "test-ws-secret-xyz789"
     config.http_api.port = 8080
     config.http_api.bind_host = "127.0.0.1"
+    # v0.2.9 3h: BotConfig.mode is read by the sim-mode-only debug
+    # endpoints (POST /debug/inject-position, /debug/clear-positions).
+    # Default the fixture to "sim" so the debug routes are reachable
+    # in tests; per-test override to "live" for the 404-gate tests.
+    config.mode = "sim"
     return config
 
 

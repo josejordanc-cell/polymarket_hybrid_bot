@@ -18,22 +18,28 @@ file deliberately contains no WS-shaped code.
 from __future__ import annotations
 
 import time
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import structlog
 from aiohttp import web
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from api.auth import verify_bearer
 from api.schemas import (
     DashboardSnapshot,
+    FillRecord,
     GlobalStats,
+    OpenPosition,
     RiskMetrics,
     StopResponse,
     StrategyCardData,
     StrategyConfigPatch,
+    StrategyId,
 )
 from api.state import BotState
+from utils.types import Position
 
 logger = structlog.get_logger(__name__)
 
@@ -102,6 +108,45 @@ def _map_alert_severity(internal: str) -> Optional[str]:
             f"Unknown internal alert severity {internal!r}; "
             f"expected one of {sorted(_ALERT_SEVERITY_MAP.keys())!r}"
         ) from exc
+
+
+def _build_open_position(pos: Any) -> OpenPosition:
+    """Build a wire OpenPosition from an internal ``utils.types.Position``.
+
+    Implements the locked-policy mapping from v0.2.9 3d-fix (see
+    ``api/schemas.py:OpenPosition`` docstring + Decision Log entry
+    ``v029-3d-fix``). All four stopgap fields (``tradeId``,
+    ``currentPrice``, ``unrealizedPnlPct``, ``unrealizedPnlUsd``) are
+    marked ``TODO(B.3-wiring)``; they ship deterministic stopgap values
+    until the RiskManager→BotState mark-pricing pipeline lands in B.1
+    full-wiring.
+
+    Accepts ``Any`` rather than ``Position`` to match the dict-or-object
+    flexibility of ``_collapse_position_id`` and to keep this module
+    layer-light; the locked-policy field reads still assume
+    ``utils.types.Position`` semantics.
+    """
+    pos_id = _collapse_position_id(pos)
+    time_open = (
+        pos.opened_at
+        .astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    direction = "Long" if pos.outcome == "YES" else "Short"
+    return OpenPosition(
+        id=pos_id,
+        tradeId=pos_id,                              # TODO(B.3-wiring): stopgap, internal Position has no per-fill id
+        symbol=pos.market_id[:12],                   # display-only truncate
+        strategy=pos.strategy,
+        direction=direction,
+        entryPrice=pos.avg_price,
+        currentPrice=pos.avg_price,                  # TODO(B.3-wiring): stopgap, no mark-pricing surface yet
+        size=pos.quantity,
+        unrealizedPnlPct=0.0,                        # TODO(B.3-wiring): stopgap
+        unrealizedPnlUsd=0.0,                        # TODO(B.3-wiring): stopgap
+        timeOpen=time_open,
+    )
 
 
 def _collapse_position_id(pos: Any) -> str:
@@ -227,30 +272,18 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         # attributes (snap.open_positions, snap.recent_fills, etc.) are
         # internal — only the wire-facing kwargs here changed.
         #
-        # positions: stays as `[]` OQ-3 stub for now. v0.2.9 3d-fix
-        # established the canonical 11-field wire shape (see
-        # api/schemas.py:OpenPosition docstring); the bot's internal
-        # utils.types.Position lacks four required wire fields
-        # (tradeId, currentPrice, unrealizedPnlUsd, unrealizedPnlPct).
-        # When B.1 fill runtime lands and positions become populated,
-        # build each OpenPosition inline here using the locked policy
-        # (Jose, 2026-05-21):
-        #   id              = _collapse_position_id(pos)
-        #   tradeId         = id                        # stopgap, same value
-        #   symbol          = pos.market_id[:12]        # display-only
-        #   strategy        = pos.strategy
-        #   direction       = "Long" if pos.outcome == "YES" else "Short"
-        #   entryPrice      = pos.avg_price
-        #   currentPrice    = entryPrice                # stopgap until mark
-        #   size            = pos.quantity
-        #   unrealizedPnlPct = 0.0                      # stopgap until mark
-        #   unrealizedPnlUsd = 0.0                      # stopgap until mark
-        #   timeOpen        = pos.opened_at.astimezone(timezone.utc)
-        #                        .isoformat().replace("+00:00", "Z")
-        # The conversion test in tests/api/test_routes_rest.py exercises
-        # this contract against a synthetic Position fixture; the
-        # production loop body lands with B.1 fill runtime.
-        positions=[],       # OQ-3 stub
+        # positions: v0.2.9 3h wires this live. Each value in
+        # snap.open_positions is an internal utils.types.Position;
+        # _build_open_position() applies the locked-policy 11-field
+        # mapping (3d-fix). Four stopgap fields (tradeId, currentPrice,
+        # unrealizedPnl{Pct,Usd}) remain TODO(B.3-wiring) until the
+        # RiskManager→BotState mark-pricing pipeline lands. Production
+        # fill-flow refresh is also B.1-full-wiring; until then this
+        # path is exercised by the /debug/inject-position endpoint
+        # (sim-mode-only, see inject_position_handler below).
+        positions=[
+            _build_open_position(p) for p in snap.open_positions.values()
+        ],
         fills=list(snap.recent_fills),
         # v0.2.9 3e: emit a zero-arg RiskMetrics() — canonical 6-field
         # shape per components/dashboard/schemas.ts:96 + BOT_CONTRACT.md
@@ -345,6 +378,186 @@ async def emergency_stop_handler(request: web.Request, state: BotState, config: 
 
 
 # ---------------------------------------------------------------------------
+# Debug-injection endpoints (sim-mode only; v0.2.9 3h)
+# ---------------------------------------------------------------------------
+#
+# These endpoints exist to exercise the snapshot-side wire shape
+# (OpenPosition 11-field + FillRecord 9-field) end-to-end without
+# requiring the real RiskManager→BotState refresh pipeline that lands
+# with B.1 full-wiring in a future session. They are STRICTLY
+# sim-mode-only and 404 in live mode (we return 404 not 403 so the
+# endpoint's existence is not advertised to non-sim deployments).
+#
+# Security model:
+#   - 404 in live mode (mode != "sim"): handled by _verify_debug_mode()
+#   - Bearer auth required: same as /dashboard/snapshot via verify_bearer
+#   - bind_host=127.0.0.1 enforced by config/settings.py:HttpApiConfig
+#     defaults + .env (BOT_HTTP_API_BIND_HOST=127.0.0.1). The aiohttp
+#     server is bound loopback-only; non-loopback access is impossible
+#     before this handler is even reached.
+#   - Every injection logs at INFO with payload (audit trail).
+# ---------------------------------------------------------------------------
+
+
+class InjectPositionRequest(BaseModel):
+    """Request body for POST /debug/inject-position.
+
+    Strategy must be wire-form (``strategy1`` / ``strategy2`` /
+    ``strategy3``); the helper does not translate from internal names.
+    ``opened_at`` defaults to ``datetime.now(timezone.utc)`` if omitted.
+    """
+
+    market_id: str = Field(min_length=1)
+    outcome: Any = Field(...)  # validated below — Literal["YES","NO"]
+    quantity: float = Field(gt=0)
+    avg_price: float = Field(gt=0, le=1.0)
+    strategy: StrategyId  # wire-form: strategy1 / strategy2 / strategy3
+    opened_at: Optional[str] = None  # ISO 8601 UTC; defaults to now()
+
+    @field_validator("outcome")
+    @classmethod
+    def _validate_outcome(cls, v: Any) -> str:
+        if v not in ("YES", "NO"):
+            raise ValueError("outcome must be 'YES' or 'NO'")
+        return v
+
+
+def _verify_debug_mode(config: Any) -> bool:
+    """Return True iff bot is in sim mode. Used to 404 the debug
+    endpoints in live deployments."""
+    mode = getattr(config, "mode", None)
+    return mode == "sim"
+
+
+def _parse_opened_at(raw: Optional[str]) -> datetime:
+    """Parse an optional ISO 8601 UTC string into a tz-aware datetime.
+
+    Accepts the bot's own canonical format (``"2026-05-21T13:00:00Z"``)
+    plus the equivalent ``"+00:00"`` form. Defaults to ``utcnow`` when
+    raw is None. Raises ``ValueError`` on unparseable input.
+    """
+    if raw is None:
+        return datetime.now(timezone.utc)
+    # Normalize "Z" suffix to "+00:00" for fromisoformat.
+    normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        # Treat naive datetimes as UTC for consistency.
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+async def inject_position_handler(
+    request: web.Request, state: BotState, config: Any
+) -> web.Response:
+    """POST /debug/inject-position — sim-mode-only debug helper.
+
+    Writes a synthetic Position into BotState.open_positions AND appends
+    a corresponding FillRecord to BotState.recent_fills. Both writes
+    happen under state.write_lock so the snapshot reads consistently.
+    """
+    # Security gate 1: 404 in non-sim mode. Check BEFORE auth so live
+    # deployments don't even acknowledge the endpoint's existence
+    # (404 response is identical whether the route exists or not).
+    if not _verify_debug_mode(config):
+        return web.Response(status=404, text="Not Found")
+
+    # Security gate 2: Bearer auth.
+    if not verify_bearer(request.headers, config):
+        return web.Response(status=401, text="Unauthorized")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text="Invalid JSON")
+
+    try:
+        req = InjectPositionRequest.model_validate(body)
+    except ValidationError as exc:
+        return web.Response(status=400, text=str(exc))
+
+    try:
+        opened_at = _parse_opened_at(req.opened_at)
+    except (ValueError, TypeError) as exc:
+        return web.Response(
+            status=400,
+            text=f"opened_at must be ISO 8601 UTC: {exc}",
+        )
+
+    position = Position(
+        market_id=req.market_id,
+        outcome=req.outcome,
+        quantity=req.quantity,
+        avg_price=req.avg_price,
+        strategy=req.strategy,
+        opened_at=opened_at,
+    )
+
+    key = f"{req.market_id}:{req.outcome}"
+    action: str = "UP" if req.outcome == "YES" else "DOWN"
+    fill = FillRecord(
+        id=uuid.uuid4().hex,
+        time=opened_at.strftime("%H:%M:%S"),
+        symbol=req.market_id[:12],
+        action=action,  # type: ignore[arg-type]
+        price=req.avg_price,
+        size=req.quantity,
+        pnl=None,
+        status="filled",
+        strategy=req.strategy,
+    )
+
+    async with state.write_lock:
+        state.open_positions[key] = position
+        state.recent_fills.append(fill)
+
+    logger.info(
+        "debug_position_injected",
+        market_id=req.market_id,
+        outcome=req.outcome,
+        quantity=req.quantity,
+        avg_price=req.avg_price,
+        strategy=req.strategy,
+        opened_at=opened_at.isoformat().replace("+00:00", "Z"),
+        fill_id=fill.id,
+    )
+
+    return web.json_response({"id": key, "status": "injected"})
+
+
+async def clear_positions_handler(
+    request: web.Request, state: BotState, config: Any
+) -> web.Response:
+    """POST /debug/clear-positions — sim-mode-only companion to
+    inject-position. Resets BotState.open_positions and
+    BotState.recent_fills so multiple inject smokes can run without a
+    bot restart. Same security gates as inject."""
+    if not _verify_debug_mode(config):
+        return web.Response(status=404, text="Not Found")
+    if not verify_bearer(request.headers, config):
+        return web.Response(status=401, text="Unauthorized")
+
+    async with state.write_lock:
+        cleared_positions = len(state.open_positions)
+        cleared_fills = len(state.recent_fills)
+        state.open_positions.clear()
+        state.recent_fills.clear()
+
+    logger.info(
+        "debug_positions_cleared",
+        cleared_positions=cleared_positions,
+        cleared_fills=cleared_fills,
+    )
+    return web.json_response(
+        {
+            "status": "cleared",
+            "cleared_positions": cleared_positions,
+            "cleared_fills": cleared_fills,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Closure factory + route registration
 # ---------------------------------------------------------------------------
 
@@ -356,7 +569,14 @@ def _make_handler(fn: Any, state: BotState, config: Any) -> Any:
 
 
 def setup_routes(app: web.Application, state: BotState, config: Any) -> None:
-    """Register the three D.2.2 REST routes onto an aiohttp Application."""
+    """Register the three D.2.2 REST routes onto an aiohttp Application.
+
+    v0.2.9 3h adds two sim-mode-only debug routes
+    (``/debug/inject-position`` and ``/debug/clear-positions``); their
+    handlers self-gate via ``_verify_debug_mode`` so registration is
+    unconditional (registration vs. 404-from-handler keeps the routing
+    table identical between sim and live deployments — same surface,
+    different runtime answer)."""
     app.router.add_get(
         "/dashboard/snapshot",
         _make_handler(snapshot_handler, state, config),
@@ -368,4 +588,14 @@ def setup_routes(app: web.Application, state: BotState, config: Any) -> None:
     app.router.add_post(
         "/emergency-stop",
         _make_handler(emergency_stop_handler, state, config),
+    )
+    # v0.2.9 3h debug-injection endpoints. 404-gated in live mode by
+    # the handlers themselves (see _verify_debug_mode).
+    app.router.add_post(
+        "/debug/inject-position",
+        _make_handler(inject_position_handler, state, config),
+    )
+    app.router.add_post(
+        "/debug/clear-positions",
+        _make_handler(clear_positions_handler, state, config),
     )

@@ -828,3 +828,317 @@ class TestMapAlertSeverity:
             _map_alert_severity("INFO")  # uppercase wrong; this is wire-side
         with pytest.raises(ValueError):
             _map_alert_severity("")
+
+
+# ---------------------------------------------------------------------------
+# TestBuildOpenPosition + snapshot positions integration (v0.2.9 3h step 1)
+# ---------------------------------------------------------------------------
+
+
+from datetime import datetime, timezone
+
+from api.routes_rest import _build_open_position
+from utils.types import Position as InternalPosition
+
+
+class TestBuildOpenPosition:
+    """Production helper that turns an internal Position into the
+    11-field wire OpenPosition. Mirrors the locked-policy mapping
+    that 3d-fix established and 3h promotes from comment to live code."""
+
+    def _make_internal(self, **overrides) -> InternalPosition:
+        defaults = dict(
+            market_id="0xabc",
+            outcome="YES",
+            quantity=50.0,
+            avg_price=0.55,
+            strategy="strategy1",
+            opened_at=datetime(2026, 5, 21, 13, 0, 0, tzinfo=timezone.utc),
+        )
+        defaults.update(overrides)
+        return InternalPosition(**defaults)
+
+    def test_full_11_field_shape(self) -> None:
+        wire = _build_open_position(self._make_internal())
+        data = wire.model_dump(mode="json")
+        assert list(data.keys()) == [
+            "id",
+            "tradeId",
+            "symbol",
+            "strategy",
+            "direction",
+            "entryPrice",
+            "currentPrice",
+            "size",
+            "unrealizedPnlPct",
+            "unrealizedPnlUsd",
+            "timeOpen",
+        ]
+
+    def test_polymarket_position_yes_direction_long(self) -> None:
+        wire = _build_open_position(self._make_internal(outcome="YES"))
+        assert wire.id == "0xabc:YES"
+        assert wire.tradeId == "0xabc:YES"  # stopgap: same as id
+        assert wire.direction == "Long"
+        assert wire.symbol == "0xabc"
+        assert wire.strategy == "strategy1"
+        assert wire.entryPrice == 0.55
+        assert wire.currentPrice == 0.55       # stopgap: mark = entry
+        assert wire.size == 50.0
+        assert wire.unrealizedPnlPct == 0.0    # stopgap
+        assert wire.unrealizedPnlUsd == 0.0    # stopgap
+        assert wire.timeOpen == "2026-05-21T13:00:00Z"
+
+    def test_polymarket_position_no_direction_short(self) -> None:
+        wire = _build_open_position(self._make_internal(outcome="NO"))
+        assert wire.id == "0xabc:NO"
+        assert wire.direction == "Short"
+
+    def test_market_id_truncated_to_12_chars_for_symbol(self) -> None:
+        long_id = "0x" + "a" * 60
+        wire = _build_open_position(self._make_internal(market_id=long_id))
+        assert wire.symbol == long_id[:12]
+        # id (collapsed) preserves the full market_id, not the truncate.
+        assert wire.id == f"{long_id}:YES"
+
+
+class TestSnapshotPositionsAfterInjection:
+    """Integration: snapshot's positions[] populates when BotState has
+    open_positions written via the helper-direct path (no debug endpoint)."""
+
+    async def test_snapshot_positions_serialise(
+        self, test_client, bot_config, bot_state
+    ) -> None:
+        # Inject directly into the fixture's BotState (bypass the debug
+        # endpoint so the integration test stays focused on the snapshot
+        # serialization path).
+        pos = InternalPosition(
+            market_id="0xdead",
+            outcome="YES",
+            quantity=10.0,
+            avg_price=0.42,
+            strategy="strategy2",
+            opened_at=datetime(2026, 5, 21, 13, 5, 0, tzinfo=timezone.utc),
+        )
+        bot_state.open_positions["0xdead:YES"] = pos
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert len(body["positions"]) == 1
+        wire = body["positions"][0]
+        assert wire["id"] == "0xdead:YES"
+        assert wire["direction"] == "Long"
+        assert wire["entryPrice"] == 0.42
+        assert wire["size"] == 10.0
+        assert wire["currentPrice"] == 0.42   # stopgap
+        assert wire["unrealizedPnlPct"] == 0.0
+        assert wire["unrealizedPnlUsd"] == 0.0
+        assert wire["timeOpen"] == "2026-05-21T13:05:00Z"
+
+
+# ---------------------------------------------------------------------------
+# TestInjectPositionHandler — sim-mode-only debug endpoint (v0.2.9 3h step 2)
+# ---------------------------------------------------------------------------
+
+
+def _inject_payload(**overrides) -> dict:
+    base = {
+        "market_id": "0xabc",
+        "outcome": "YES",
+        "quantity": 50.0,
+        "avg_price": 0.55,
+        "strategy": "strategy1",
+        "opened_at": "2026-05-21T13:00:00Z",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestInjectPositionHandler:
+    """POST /debug/inject-position. Sim-mode-only; Bearer-auth-required;
+    writes BotState.open_positions AND BotState.recent_fills atomically."""
+
+    async def test_sim_mode_200(self, test_client, bot_config, bot_state):
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body == {"id": "0xabc:YES", "status": "injected"}
+        # BotState.open_positions populated.
+        assert "0xabc:YES" in bot_state.open_positions
+        pos = bot_state.open_positions["0xabc:YES"]
+        assert pos.market_id == "0xabc"
+        assert pos.outcome == "YES"
+        assert pos.quantity == 50.0
+        assert pos.avg_price == 0.55
+        # BotState.recent_fills also appended (one new fill on top of
+        # the two pre-existing fixture fills).
+        fills = list(bot_state.recent_fills)
+        assert len(fills) == 3
+        injected_fill = fills[-1]
+        assert injected_fill.symbol == "0xabc"
+        assert injected_fill.action == "UP"
+        assert injected_fill.size == 50.0
+        assert injected_fill.price == 0.55
+        assert injected_fill.strategy == "strategy1"
+
+    async def test_outcome_no_emits_down_action(
+        self, test_client, bot_config, bot_state
+    ):
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(outcome="NO"),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 200
+        fill = list(bot_state.recent_fills)[-1]
+        assert fill.action == "DOWN"
+
+    async def test_default_opened_at_uses_now(
+        self, test_client, bot_config, bot_state
+    ):
+        payload = _inject_payload()
+        del payload["opened_at"]
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=payload,
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 200
+        pos = bot_state.open_positions["0xabc:YES"]
+        # Should be ~now (within 60s).
+        now = datetime.now(timezone.utc)
+        assert abs((now - pos.opened_at).total_seconds()) < 60
+
+    async def test_live_mode_404(self, test_client, bot_config):
+        """Security gate: 404 (not 403, not 401) in non-sim mode so
+        the endpoint's existence is not advertised."""
+        bot_config.mode = "live"
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 404
+
+    async def test_live_mode_404_even_without_auth(
+        self, test_client, bot_config
+    ):
+        """404 mode-gate fires BEFORE auth — live deployments should be
+        indistinguishable from missing-route 404s for any caller."""
+        bot_config.mode = "live"
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(),
+        )
+        assert resp.status == 404
+
+    async def test_missing_auth_401(self, test_client):
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(),
+        )
+        assert resp.status == 401
+
+    async def test_wrong_token_401(self, test_client):
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(),
+            headers={"Authorization": "Bearer wrong-token-xyz"},
+        )
+        assert resp.status == 401
+
+    async def test_invalid_json_400(self, test_client, bot_config):
+        resp = await test_client.post(
+            "/debug/inject-position",
+            data=b"not-json",
+            headers={
+                "Content-Type": "application/json",
+                **_auth_headers(bot_config),
+            },
+        )
+        assert resp.status == 400
+
+    async def test_missing_required_field_400(self, test_client, bot_config):
+        payload = _inject_payload()
+        del payload["market_id"]
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=payload,
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 400
+
+    async def test_invalid_outcome_400(self, test_client, bot_config):
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(outcome="MAYBE"),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 400
+
+    async def test_invalid_strategy_400(self, test_client, bot_config):
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(strategy="strategy99"),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 400
+
+    async def test_invalid_opened_at_400(self, test_client, bot_config):
+        resp = await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(opened_at="not-iso-8601"),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 400
+
+
+# ---------------------------------------------------------------------------
+# TestClearPositionsHandler (v0.2.9 3h step 2 companion)
+# ---------------------------------------------------------------------------
+
+
+class TestClearPositionsHandler:
+    """POST /debug/clear-positions empties BotState.open_positions and
+    BotState.recent_fills. Same security gates as inject."""
+
+    async def test_sim_mode_clears(self, test_client, bot_config, bot_state):
+        # Inject first so there's something to clear.
+        await test_client.post(
+            "/debug/inject-position",
+            json=_inject_payload(),
+            headers=_auth_headers(bot_config),
+        )
+        assert "0xabc:YES" in bot_state.open_positions
+
+        resp = await test_client.post(
+            "/debug/clear-positions",
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["status"] == "cleared"
+        assert body["cleared_positions"] >= 1
+        assert body["cleared_fills"] >= 1
+        # BotState side-effect verified.
+        assert bot_state.open_positions == {}
+        assert len(bot_state.recent_fills) == 0
+
+    async def test_live_mode_404(self, test_client, bot_config):
+        bot_config.mode = "live"
+        resp = await test_client.post(
+            "/debug/clear-positions",
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 404
+
+    async def test_missing_auth_401(self, test_client):
+        resp = await test_client.post("/debug/clear-positions")
+        assert resp.status == 401
