@@ -29,21 +29,51 @@ from api.schemas import (
 
 
 def test_globalstats_round_trip() -> None:
+    """v0.2.9 contract: 8 required fields per dashboard GlobalStatsSchema."""
     stats = GlobalStats(
-        totalEquity=12500.0,
-        dayPnl=300.0,
-        dayPnlPct=2.4,
-        openPositions=3,
-        totalTrades=42,
+        portfolioValue=12500.0,
+        pnlToday=300.0,
+        pnlMonth=1200.0,
+        pnlAllTime=4800.0,
         winRate=0.6,
-        sharpeRatio=None,
-        maxDrawdown=None,
+        totalTrades=42,
+        streak=3,
+        lastUpdatedAt=1700000000000,
     )
     data = stats.model_dump(mode="json")
-    assert isinstance(data["totalEquity"], float)
-    assert isinstance(data["openPositions"], int)
-    assert data["sharpeRatio"] is None
-    assert data["maxDrawdown"] is None
+    assert isinstance(data["portfolioValue"], float)
+    assert isinstance(data["totalTrades"], int)
+    assert isinstance(data["streak"], int)
+    assert isinstance(data["lastUpdatedAt"], int)
+    assert data["pnlMonth"] == 1200.0
+    assert data["pnlAllTime"] == 4800.0
+    # Removed fields must not appear in the dumped payload.
+    assert "totalEquity" not in data
+    assert "dayPnl" not in data
+    assert "dayPnlPct" not in data
+    assert "openPositions" not in data
+    assert "sharpeRatio" not in data
+    assert "maxDrawdown" not in data
+
+
+def test_globalstats_rejects_missing_required_field() -> None:
+    """v0.2.9 contract: all 8 fields required. Omitting portfolioValue
+    (the renamed totalEquity) must raise ValidationError; the old-shape
+    keyword `totalEquity` is silently dropped by pydantic v2's default
+    extras-ignore policy, so the failure surfaces as 'portfolioValue
+    missing' rather than 'totalEquity unknown'."""
+    with pytest.raises(ValidationError):
+        GlobalStats(
+            totalEquity=12500.0,   # old-shape key — ignored
+            dayPnl=300.0,           # old-shape key — ignored
+            pnlMonth=0.0,
+            pnlAllTime=0.0,
+            winRate=0.6,
+            totalTrades=42,
+            streak=0,
+            lastUpdatedAt=1700000000000,
+            # portfolioValue + pnlToday omitted → ValidationError
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -280,17 +310,30 @@ def test_dashboardsnapshot_all_optional() -> None:
     assert snap.backtest is None
     assert snap.recentLogs is None
     assert snap.recentAlerts is None
-    assert snap.lastUpdatedAt is None
+
+
+def test_dashboardsnapshot_no_top_level_lastUpdatedAt() -> None:
+    """v0.2.9 audit row A.2: lastUpdatedAt was relocated from
+    DashboardSnapshot root into globalStats. The model must reject the
+    attribute at the snapshot root level (pydantic v2 default
+    extras-ignore policy means it's silently dropped, but the attribute
+    must no longer exist on the model)."""
+    snap = DashboardSnapshot()
+    assert not hasattr(snap, "lastUpdatedAt")
+    data = snap.model_dump(mode="json")
+    assert "lastUpdatedAt" not in data
 
 
 def test_dashboardsnapshot_partial() -> None:
     gs = GlobalStats(
-        totalEquity=10000.0,
-        dayPnl=100.0,
-        dayPnlPct=1.0,
-        openPositions=2,
-        totalTrades=20,
+        portfolioValue=10000.0,
+        pnlToday=100.0,
+        pnlMonth=400.0,
+        pnlAllTime=1600.0,
         winRate=0.55,
+        totalTrades=20,
+        streak=0,
+        lastUpdatedAt=1700000500000,
     )
     snap = DashboardSnapshot(globalStats=gs)
     data = snap.model_dump(mode="json", exclude_none=True)
@@ -298,15 +341,16 @@ def test_dashboardsnapshot_partial() -> None:
 
 
 def test_dashboardsnapshot_full_round_trip() -> None:
+    """v0.2.9 contract: lastUpdatedAt lives inside globalStats, not at root."""
     gs = GlobalStats(
-        totalEquity=15000.0,
-        dayPnl=500.0,
-        dayPnlPct=3.4,
-        openPositions=1,
-        totalTrades=30,
+        portfolioValue=15000.0,
+        pnlToday=500.0,
+        pnlMonth=2000.0,
+        pnlAllTime=6000.0,
         winRate=0.6,
-        sharpeRatio=1.2,
-        maxDrawdown=0.05,
+        totalTrades=30,
+        streak=4,
+        lastUpdatedAt=1700001000000,
     )
     fill = FillRecord(
         id="fill-rt-01",
@@ -320,14 +364,15 @@ def test_dashboardsnapshot_full_round_trip() -> None:
     snap = DashboardSnapshot(
         globalStats=gs,
         recentFills=[fill],
-        lastUpdatedAt=1700001000000,
     )
     data = snap.model_dump(mode="json")
+    # lastUpdatedAt must live inside globalStats, not at the snapshot root.
+    assert "lastUpdatedAt" not in data
+    assert data["globalStats"]["lastUpdatedAt"] == 1700001000000
     snap2 = DashboardSnapshot.model_validate(data)
-    assert isinstance(snap2.lastUpdatedAt, int)
-    assert snap2.lastUpdatedAt == 1700001000000
     assert snap2.globalStats is not None
-    assert snap2.globalStats.totalEquity == 15000.0
+    assert snap2.globalStats.lastUpdatedAt == 1700001000000
+    assert snap2.globalStats.portfolioValue == 15000.0
     assert snap2.recentFills is not None
     assert len(snap2.recentFills) == 1
 

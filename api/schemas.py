@@ -72,16 +72,19 @@ def dashboard_to_bot(contract_id: str) -> str:
 
 
 class GlobalStats(BaseModel):
-    """Mirrors GlobalStatsSchema in the dashboard's Zod schemas."""
+    """Mirrors dashboard GlobalStatsSchema in components/dashboard/schemas.ts.
+    Per docs/BOT_CONTRACT.md v1.0, all 8 fields are required. lastUpdatedAt
+    is epoch ms; the dashboard's stale-snapshot gate at
+    lib/refreshDashboard.ts reads globalStats.lastUpdatedAt."""
 
-    totalEquity: float
-    dayPnl: float
-    dayPnlPct: float
-    openPositions: int
-    totalTrades: int
+    portfolioValue: float
+    pnlToday: float
+    pnlMonth: float
+    pnlAllTime: float
     winRate: float
-    sharpeRatio: Optional[float] = None
-    maxDrawdown: Optional[float] = None
+    totalTrades: int
+    streak: int
+    lastUpdatedAt: int  # epoch ms — moved here from DashboardSnapshot top-level per A.2
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +357,8 @@ class DashboardSnapshot(BaseModel):
     recentLogs: Optional[list[BotLogEntry]] = None          # OQ-3 stub
     recentAlerts: Optional[list[AlertItem]] = None          # OQ-3 stub
 
-    # Monotonic snapshot counter (see D.2.1 §4 last_updated_at_ms)
-    lastUpdatedAt: Optional[int] = None  # epoch ms
+    # lastUpdatedAt now lives inside globalStats per audit row A.2 — see
+    # GlobalStats.lastUpdatedAt and docs/BOT_CONTRACT.md v1.0.
 
 
 # ---------------------------------------------------------------------------

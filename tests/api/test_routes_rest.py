@@ -88,17 +88,33 @@ class TestSnapshotHandler:
         assert resp.status == 401
 
     async def test_snapshot_body_globalstats_present(self, test_client, bot_config):
+        """v0.2.9 contract shape: 8-field globalStats; lastUpdatedAt lives
+        inside globalStats (not at snapshot root) per audit row A.2."""
         resp = await test_client.get(
             "/dashboard/snapshot", headers=_auth_headers(bot_config)
         )
         assert resp.status == 200
         body = await resp.json()
         gs = body["globalStats"]
-        assert gs["totalEquity"] == 10000.0
-        # equity=10000.0, day_start_equity=9500.0 -> dayPnl=500.0
-        assert gs["dayPnl"] == 500.0
-        # no open positions in fixture
-        assert gs["openPositions"] == 0
+        assert gs["portfolioValue"] == 10000.0
+        # equity=10000.0, day_start_equity=9500.0 -> pnlToday=500.0
+        assert gs["pnlToday"] == 500.0
+        # OQ-3 stubs — pipeline not wired
+        assert gs["pnlMonth"] == 0.0
+        assert gs["pnlAllTime"] == 0.0
+        assert gs["winRate"] == 0.0
+        assert gs["totalTrades"] == 0
+        assert gs["streak"] == 0
+        # lastUpdatedAt moved from snapshot root into globalStats per A.2
+        assert isinstance(gs["lastUpdatedAt"], int)
+        assert "lastUpdatedAt" not in body
+        # Removed fields must not appear
+        assert "totalEquity" not in gs
+        assert "dayPnl" not in gs
+        assert "dayPnlPct" not in gs
+        # openPositions: int was bot-only per B.1; only the top-level
+        # list[OpenPosition] (an OQ-3 stub) remains on the snapshot.
+        assert "openPositions" not in gs
 
     async def test_snapshot_body_strategies_three_entries(self, test_client, bot_config):
         resp = await test_client.get(

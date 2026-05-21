@@ -50,11 +50,6 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
     empties until D.2.4 wires telemetry.
     """
     day_pnl = snap.equity - snap.day_start_equity
-    day_pnl_pct = (
-        (day_pnl / snap.day_start_equity * 100.0)
-        if snap.day_start_equity
-        else 0.0
-    )
 
     strategy_name_map = {
         "strategy1": "Intra-Arbitrage",
@@ -65,12 +60,14 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
 
     return DashboardSnapshot(
         globalStats=GlobalStats(
-            totalEquity=snap.equity,
-            dayPnl=day_pnl,
-            dayPnlPct=day_pnl_pct,
-            openPositions=len(snap.open_positions),
-            totalTrades=0,   # OQ-3 stub
-            winRate=0.0,     # OQ-3 stub
+            portfolioValue=snap.equity,
+            pnlToday=day_pnl,
+            pnlMonth=0.0,            # OQ-3 stub — pipeline not wired
+            pnlAllTime=0.0,          # OQ-3 stub — pipeline not wired
+            winRate=0.0,             # OQ-3 stub — pipeline not wired
+            totalTrades=0,           # OQ-3 stub — pipeline not wired
+            streak=0,                # OQ-3 stub — pipeline not wired
+            lastUpdatedAt=snap.last_updated_at_ms,
         ),
         strategies=[
             StrategyCardData(
@@ -99,7 +96,6 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         ],
         openPositions=[],   # OQ-3 stub
         recentFills=list(snap.recent_fills),
-        lastUpdatedAt=snap.last_updated_at_ms,
         equityHistory=[],   # OQ-3 stub
         monthlyPnl=[],      # OQ-3 stub
         backtest=[],        # OQ-3 stub
