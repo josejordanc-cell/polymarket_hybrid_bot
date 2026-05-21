@@ -424,8 +424,21 @@ class InjectPositionRequest(BaseModel):
 
 def _verify_debug_mode(config: Any) -> bool:
     """Return True iff bot is in sim mode. Used to 404 the debug
-    endpoints in live deployments."""
-    mode = getattr(config, "mode", None)
+    endpoints in live deployments.
+
+    v0.2.9 3h-fix: the field lives at ``config.runtime.mode`` —
+    ``RuntimeConfig.mode`` (config/settings.py:224), nested on
+    ``BotConfig`` at ``config/settings.py:282``. NOT ``config.mode``.
+    Reads via a getattr chain so a partially-initialised config (or a
+    MagicMock without a fully-specified ``runtime`` attribute) returns
+    False — the conservative default in any ambiguous case is "not
+    sim" → 404, which preserves the security property even under
+    config-shape drift.
+    """
+    runtime = getattr(config, "runtime", None)
+    if runtime is None:
+        return False
+    mode = getattr(runtime, "mode", None)
     return mode == "sim"
 
 

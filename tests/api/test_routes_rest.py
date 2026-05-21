@@ -1019,7 +1019,7 @@ class TestInjectPositionHandler:
     async def test_live_mode_404(self, test_client, bot_config):
         """Security gate: 404 (not 403, not 401) in non-sim mode so
         the endpoint's existence is not advertised."""
-        bot_config.mode = "live"
+        bot_config.runtime.mode = "live"
         resp = await test_client.post(
             "/debug/inject-position",
             json=_inject_payload(),
@@ -1032,7 +1032,7 @@ class TestInjectPositionHandler:
     ):
         """404 mode-gate fires BEFORE auth — live deployments should be
         indistinguishable from missing-route 404s for any caller."""
-        bot_config.mode = "live"
+        bot_config.runtime.mode = "live"
         resp = await test_client.post(
             "/debug/inject-position",
             json=_inject_payload(),
@@ -1132,7 +1132,7 @@ class TestClearPositionsHandler:
         assert len(bot_state.recent_fills) == 0
 
     async def test_live_mode_404(self, test_client, bot_config):
-        bot_config.mode = "live"
+        bot_config.runtime.mode = "live"
         resp = await test_client.post(
             "/debug/clear-positions",
             headers=_auth_headers(bot_config),
