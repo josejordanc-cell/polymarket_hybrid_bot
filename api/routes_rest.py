@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import structlog
 from aiohttp import web
@@ -572,6 +572,131 @@ async def clear_positions_handler(
 
 
 # ---------------------------------------------------------------------------
+# /debug/inject-alert (v0.2.9 b9-fix; sim-mode only)
+# ---------------------------------------------------------------------------
+#
+# Runtime-smoke companion to /debug/inject-position. The B.9 commit
+# (v029-b9-alerts-wiring) wired ``utils.alerts.send_alert`` to populate
+# both ``BotState.recent_alerts`` AND the WS broadcast — but no
+# startup-time bot path actually FIRES send_alert under normal
+# operation (startup warnings go through structlog, not send_alert).
+# This endpoint fires send_alert on demand so smoke can curl an alert
+# through the full production path (state append + WS broadcast) and
+# eyeball the snapshot result.
+#
+# Architecture decision: call ``send_alert`` (rather than write
+# directly to ``state.recent_alerts``). Reasons:
+#   - Exercises the EXACT production code path. A direct write would
+#     duplicate the AlertItem construction and risk silent drift from
+#     the send_alert path.
+#   - Lights up the WS broadcast too — browser devtools' WS-Messages
+#     pane shows the frame, completing the runtime smoke.
+#   - Endpoint stays a thin shim over the wired-up B.9 surface;
+#     forward changes to send_alert flow through without endpoint
+#     edits.
+#
+# Security gates identical to /debug/inject-position (3h precedent):
+#   1. Sim-mode 404 BEFORE auth — endpoint absent on live deployments.
+#   2. Bearer auth required.
+#   3. State-side append happens under state.write_lock (inside
+#      send_alert).
+#   4. INFO log on successful injection (audit trail).
+#   5. Pydantic InjectAlertPayload validation rejects malformed input
+#      with 400 (not 422 — matches inject-position convention).
+# ---------------------------------------------------------------------------
+
+
+class InjectAlertPayload(BaseModel):
+    """Request body for POST /debug/inject-alert.
+
+    Three required fields mirroring ``utils.alerts.send_alert``'s public
+    signature. ``id`` and ``time`` are computed inside send_alert; the
+    caller does NOT supply them — they're filled with ``uuid4().hex``
+    and ``strftime("%H:%M:%S")`` respectively at the broadcast site."""
+
+    message: str = Field(min_length=1)
+    level: Literal["info", "warning", "critical"] = "info"
+    source: str = Field(default="debug-inject", min_length=1)
+
+
+async def inject_alert_handler(
+    request: web.Request, state: BotState, config: Any
+) -> web.Response:
+    """POST /debug/inject-alert — sim-mode-only debug helper.
+
+    Fires ``utils.alerts.send_alert`` with the request body's message /
+    level / source. The B.9 wiring then:
+      1. Builds a wire-shape ``AlertItem`` Pydantic instance.
+      2. Appends it to ``BotState.recent_alerts`` under write_lock.
+      3. Broadcasts ``{"type":"ALERT", "payload": <AlertItem>}`` to WS
+         subscribers (silently no-ops if no Emitter is registered).
+
+    The endpoint then reads ``state.recent_alerts[-1]`` to return the
+    AlertItem it just produced — letting curl-callers verify the
+    round-trip without a second snapshot request.
+    """
+    # Security gate 1: 404 in non-sim mode (BEFORE auth — see 3h
+    # precedent). _verify_debug_mode walks config.runtime.mode.
+    if not _verify_debug_mode(config):
+        return web.Response(status=404, text="Not Found")
+
+    # Security gate 2: Bearer auth.
+    if not verify_bearer(request.headers, config):
+        return web.Response(status=401, text="Unauthorized")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text="Invalid JSON")
+
+    try:
+        req = InjectAlertPayload.model_validate(body)
+    except ValidationError as exc:
+        return web.Response(status=400, text=str(exc))
+
+    # Capture the deque length BEFORE send_alert so we can resolve the
+    # appended item by index in a way that's robust against concurrent
+    # injections (the endpoint holds no extra lock around send_alert;
+    # send_alert itself acquires state.write_lock for the append).
+    pre_len = len(state.recent_alerts)
+
+    # Import locally to avoid a top-of-file circular concern; api/state
+    # is already imported by this module so the utils/alerts → api/state
+    # chain that send_alert relies on is already established.
+    from utils.alerts import send_alert as _send_alert
+
+    await _send_alert(req.message, level=req.level, source=req.source)
+
+    # Read back the freshly appended AlertItem. send_alert's state-write
+    # path is the only writer of recent_alerts; under sim-mode debug
+    # smoke there are no concurrent appenders, so the new entry is the
+    # last in the deque.
+    if len(state.recent_alerts) <= pre_len:
+        # send_alert silently no-op'd (state singleton not registered
+        # via set_state). This shouldn't happen in production wiring
+        # but surface it explicitly rather than returning a misleading
+        # 200 with stale data.
+        return web.Response(
+            status=500,
+            text=(
+                "send_alert did not append to BotState.recent_alerts — "
+                "is api.state.set_state wired at startup?"
+            ),
+        )
+    alert = state.recent_alerts[-1]
+
+    logger.info(
+        "debug_alert_injected",
+        message=req.message,
+        level=req.level,
+        source=req.source,
+        alert_id=alert.id,
+    )
+
+    return web.json_response(alert.model_dump(mode="json"))
+
+
+# ---------------------------------------------------------------------------
 # Closure factory + route registration
 # ---------------------------------------------------------------------------
 
@@ -612,4 +737,11 @@ def setup_routes(app: web.Application, state: BotState, config: Any) -> None:
     app.router.add_post(
         "/debug/clear-positions",
         _make_handler(clear_positions_handler, state, config),
+    )
+    # v0.2.9 b9-fix: alerts runtime-smoke companion. Same 404-gate +
+    # Bearer-auth surface as inject-position; uses send_alert internally
+    # so production B.9 wiring is exercised end-to-end.
+    app.router.add_post(
+        "/debug/inject-alert",
+        _make_handler(inject_alert_handler, state, config),
     )

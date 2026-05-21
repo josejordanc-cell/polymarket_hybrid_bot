@@ -13,6 +13,8 @@ Scope: function (default) — each test gets a fresh BotState via conftest.
 """
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -49,14 +51,26 @@ def _auth_headers(bot_config) -> dict[str, str]:
 
 @pytest.fixture
 async def test_client(bot_state, bot_config):
-    """aiohttp TestClient bound to the real setup_routes registration."""
+    """aiohttp TestClient bound to the real setup_routes registration.
+
+    v0.2.9 b9-fix: also registers the BotState singleton via
+    ``set_state(bot_state)`` so handler code paths that go through
+    ``utils.alerts.send_alert`` (e.g. POST /debug/inject-alert) see the
+    same BotState the snapshot handler reads. Mirrors the production
+    wiring in ``api/server.py``. Teardown clears the singleton."""
+    from api.state import set_state as _set_state_for_test
+
     app = web.Application()
     setup_routes(app, bot_state, bot_config)
+    _set_state_for_test(bot_state)
     server = TestServer(app)
     client = TestClient(server)
     await client.start_server()
-    yield client
-    await client.close()
+    try:
+        yield client
+    finally:
+        await client.close()
+        _set_state_for_test(None)
 
 
 # ---------------------------------------------------------------------------
@@ -1193,3 +1207,203 @@ class TestSnapshotAlertsAfterSendAlert:
         finally:
             set_state(None)
             set_emitter(None)
+
+
+# ---------------------------------------------------------------------------
+# TestInjectAlertHandler — sim-mode-only b9-fix debug endpoint
+# ---------------------------------------------------------------------------
+
+
+def _inject_alert_payload(**overrides) -> dict:
+    base = {
+        "message": "smoke test alert",
+        "level": "warning",
+        "source": "debug-inject-test",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestInjectAlertHandler:
+    """POST /debug/inject-alert. Sim-mode-only debug endpoint that
+    fires send_alert internally so the full B.9 production path
+    (state.recent_alerts append + WS broadcast) is exercised. Mirrors
+    the /debug/inject-position 3h pattern."""
+
+    async def test_sim_mode_200_writes_state_and_returns_alertitem(
+        self, test_client, bot_config, bot_state
+    ):
+        """Happy path: 200 + response body is the 5-field AlertItem +
+        BotState.recent_alerts grew by exactly one. The test_client
+        fixture wires set_state(bot_state) so send_alert's state-write
+        path lights up."""
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            json=_inject_alert_payload(),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+
+        # Response is the wire-shape AlertItem in canonical Zod order.
+        assert list(body.keys()) == [
+            "id",
+            "time",
+            "severity",
+            "source",
+            "message",
+        ]
+        assert body["severity"] == "warning"
+        assert body["source"] == "debug-inject-test"
+        assert body["message"] == "smoke test alert"
+
+        # State-side append happened (deque started with 0 alerts).
+        assert len(bot_state.recent_alerts) == 1
+        appended = bot_state.recent_alerts[0]
+        assert appended.id == body["id"]
+        assert appended.message == body["message"]
+
+    async def test_inject_alert_also_broadcasts_via_ws(
+        self, test_client, bot_config, bot_state
+    ):
+        """The endpoint calls send_alert which BOTH appends to state
+        AND broadcasts to WS subscribers. Verify the WS path fires by
+        registering an Emitter mock; this completes the b9-fix
+        production-parity guarantee."""
+        from api.emit import Emitter
+        from utils.alerts import set_emitter
+
+        em = MagicMock(spec=Emitter)
+        em.broadcast = AsyncMock()
+        set_emitter(em)
+        try:
+            resp = await test_client.post(
+                "/debug/inject-alert",
+                json=_inject_alert_payload(level="critical"),
+                headers=_auth_headers(bot_config),
+            )
+            assert resp.status == 200
+            # State-side: one append.
+            assert len(bot_state.recent_alerts) == 1
+            # WS-side: one broadcast with matching payload.
+            em.broadcast.assert_awaited_once()
+            ws_msg = em.broadcast.await_args.args[0]
+            assert ws_msg["type"] == "ALERT"
+            ws_payload = ws_msg["payload"]
+            assert ws_payload["severity"] == "critical"
+            assert ws_payload["message"] == "smoke test alert"
+            # Same AlertItem flowed to both paths (single source of truth).
+            assert ws_payload["id"] == bot_state.recent_alerts[0].id
+        finally:
+            set_emitter(None)
+
+    async def test_inject_alert_appears_in_subsequent_snapshot(
+        self, test_client, bot_config, bot_state
+    ):
+        """End-to-end runtime-smoke: inject one alert, then GET
+        /dashboard/snapshot and assert it appears in body["alerts"]."""
+        await test_client.post(
+            "/debug/inject-alert",
+            json=_inject_alert_payload(message="visible in snapshot"),
+            headers=_auth_headers(bot_config),
+        )
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert len(body["alerts"]) == 1
+        assert body["alerts"][0]["message"] == "visible in snapshot"
+        assert body["alerts"][0]["severity"] == "warning"
+
+    @pytest.mark.parametrize("level", ["info", "warning", "critical"])
+    async def test_all_severity_literals_accepted(
+        self, test_client, bot_config, level, bot_state
+    ):
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            json=_inject_alert_payload(level=level),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["severity"] == level
+
+    async def test_live_mode_404_before_auth(self, test_client, bot_config):
+        """Security gate ordering: 404 fires BEFORE the auth check —
+        live deployments don't acknowledge the endpoint's existence."""
+        bot_config.runtime.mode = "live"
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            json=_inject_alert_payload(),
+            # Intentionally NO auth header — still 404, not 401, because
+            # the mode gate fires first.
+        )
+        assert resp.status == 404
+
+    async def test_live_mode_404_even_with_auth(self, test_client, bot_config):
+        """Same as above but WITH auth — still 404 because mode gate
+        fires before the auth check."""
+        bot_config.runtime.mode = "live"
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            json=_inject_alert_payload(),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 404
+
+    async def test_missing_auth_401(self, test_client):
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            json=_inject_alert_payload(),
+        )
+        assert resp.status == 401
+
+    async def test_wrong_token_401(self, test_client):
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            json=_inject_alert_payload(),
+            headers={"Authorization": "Bearer wrong-token-xyz"},
+        )
+        assert resp.status == 401
+
+    async def test_invalid_json_400(self, test_client, bot_config):
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            data=b"not-json",
+            headers={
+                "Content-Type": "application/json",
+                **_auth_headers(bot_config),
+            },
+        )
+        assert resp.status == 400
+
+    async def test_missing_message_400(self, test_client, bot_config):
+        payload = _inject_alert_payload()
+        del payload["message"]
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            json=payload,
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 400
+
+    async def test_invalid_level_enum_400(self, test_client, bot_config):
+        """level must be Literal["info","warning","critical"];
+        anything else (including the internal 5-tier "error") fails
+        Pydantic validation with 400."""
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            json=_inject_alert_payload(level="error"),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 400
+
+    async def test_empty_message_400(self, test_client, bot_config):
+        resp = await test_client.post(
+            "/debug/inject-alert",
+            json=_inject_alert_payload(message=""),
+            headers=_auth_headers(bot_config),
+        )
+        assert resp.status == 400
