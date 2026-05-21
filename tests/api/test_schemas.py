@@ -16,6 +16,7 @@ from api.schemas import (
     FillRecord,
     GlobalStats,
     OpenPosition,
+    PriceTick,
     RiskMetrics,
     StopResponse,
     StrategyCardData,
@@ -1004,3 +1005,105 @@ def test_alertitem_severity_enum() -> None:
                 source="x",
                 message="x",
             )
+
+
+# ---------------------------------------------------------------------------
+# Section: PriceTick (v0.2.9 3i — audit row B.14)
+# ---------------------------------------------------------------------------
+
+
+def test_pricetick_default_shape() -> None:
+    """v0.2.9 3i: canonical 5-field Zod shape per
+    components/dashboard/schemas.ts:211 + BOT_CONTRACT.md v1.0.
+    Exact key order: symbol, last, bid, ask, ts."""
+    tick = PriceTick(
+        symbol="BTC/USDT",
+        last=77800.0,
+        bid=77795.0,
+        ask=77805.0,
+        ts=1716302400000,
+    )
+    data = tick.model_dump(mode="json")
+    assert list(data.keys()) == ["symbol", "last", "bid", "ask", "ts"]
+    assert data["symbol"] == "BTC/USDT"
+    assert data["last"] == 77800.0
+    assert data["bid"] == 77795.0
+    assert data["ask"] == 77805.0
+    assert data["ts"] == 1716302400000
+    assert isinstance(data["ts"], int)  # epoch ms, NOT float seconds
+
+
+def test_pricetick_required_fields_only() -> None:
+    """v0.2.9 3i policy lock 4 + 6: bid/ask default to None in v1.
+    Per 3i policy lock 5, ts is always populated by the bot — the
+    Optional in the model is for forward-compatibility / parse robustness
+    only."""
+    tick = PriceTick(symbol="BTC/USD", last=77800.0)
+    assert tick.symbol == "BTC/USD"
+    assert tick.last == 77800.0
+    assert tick.bid is None
+    assert tick.ask is None
+    assert tick.ts is None
+
+
+def test_pricetick_bid_ask_explicit_none() -> None:
+    """v0.2.9 3i: bot ships bid=None / ask=None explicitly today (the
+    spot feed discards ccxt bid/ask at ingestion). Verify the model
+    round-trips that representation cleanly."""
+    tick = PriceTick(symbol="ETH/USDT", last=3400.0, bid=None, ask=None, ts=1716302400000)
+    data = tick.model_dump(mode="json")
+    assert data["bid"] is None
+    assert data["ask"] is None
+    # Round-trip via model_validate.
+    tick2 = PriceTick.model_validate(data)
+    assert tick2.bid is None
+    assert tick2.ask is None
+
+
+def test_pricetick_ts_is_13_digit_epoch_ms() -> None:
+    """v0.2.9 3i policy lock 5 + Team A 3g .refine(): ts is epoch
+    milliseconds (13-digit, ~1.7e12). Document the unit explicitly
+    so regression catches any drift back to epoch seconds."""
+    # Representative 2024-05-21 epoch ms.
+    ts_ms = 1716302400000
+    tick = PriceTick(symbol="BTC/USDT", last=77800.0, ts=ts_ms)
+    assert tick.ts == ts_ms
+    # Sanity: within Team A's 3g refine() range [1e12, 1e14).
+    assert 1_000_000_000_000 <= tick.ts < 100_000_000_000_000
+
+
+def test_pricetick_last_must_be_positive() -> None:
+    """v0.2.9 3i: last is a price; gt=0 enforced at the model layer
+    (defense-in-depth on top of the feed's own ``price > 0`` guard at
+    data_feeds/binance_feed.py:98)."""
+    with pytest.raises(ValidationError):
+        PriceTick(symbol="BTC/USDT", last=0.0)
+    with pytest.raises(ValidationError):
+        PriceTick(symbol="BTC/USDT", last=-1.0)
+
+
+def test_pricetick_rejects_legacy_fields() -> None:
+    """v0.2.9 3i: the pre-3i shape (marketId, price, ts: Optional[float]
+    seconds) is no longer accepted. Per pydantic v2 default
+    extras-ignore policy, legacy kwargs are silently dropped — so
+    construction fails because the new required fields (symbol, last)
+    are missing."""
+    with pytest.raises(ValidationError):
+        PriceTick(
+            marketId="0xabc",          # legacy key — silently dropped
+            price=77800.0,             # legacy key — silently dropped
+            ts=1.716302400e9,          # legacy: epoch SECONDS as float
+            # symbol + last omitted → ValidationError
+        )
+
+    # When the new required fields are present, legacy keys are silently
+    # dropped and the dump does not contain them.
+    tick = PriceTick(
+        marketId="0xabc",              # legacy — dropped
+        price=999.0,                   # legacy — dropped
+        symbol="BTC/USDT",
+        last=77800.0,
+    )
+    data = tick.model_dump()
+    assert "marketId" not in data
+    assert "price" not in data

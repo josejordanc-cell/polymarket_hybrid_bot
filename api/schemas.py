@@ -606,11 +606,37 @@ class StrategyRuntimeConfig(BaseModel):
 
 
 class PriceTick(BaseModel):
-    """Lightweight price tick used internally by the TICK WS message."""
+    """Wire shape for the TICK WS message — canonical Zod source at
+    ``components/dashboard/schemas.ts:211`` + ``BOT_CONTRACT.md`` v1.0.
+    Five fields in wire order; ``symbol`` and ``last`` required, the
+    other three Optional.
 
-    marketId: str
-    price: float
-    ts: Optional[float] = None  # Unix epoch seconds; None if not available
+    v0.2.9 sub-phase 3i: complete rewrite of the previous internal-only
+    shape ``(marketId, price, ts: Optional[float] seconds)``. New fields
+    match Zod byte-for-byte:
+
+    - ``symbol`` — BASE/QUOTE format (e.g. ``"BTC/USDT"``,
+      ``"BTC/USD"``). Per the 3i policy lock, the bot ships the venue's
+      native quote currency verbatim; no normalization, no venue
+      prefix.
+    - ``last``   — last-traded price. Bot sources from
+      ``utils.types.SpotTick.price`` (ccxt ticker ``last`` / ``close``
+      fallback at ``data_feeds/binance_feed.py``).
+    - ``bid``    — Optional. Always ``None`` in v0.2.9 3i (the spot
+      feed discards ccxt ``ticker["bid"]`` at ingestion today). Future
+      sub-phase can wire bid/ask through ``SpotTick``.
+    - ``ask``    — Optional. Same as ``bid``.
+    - ``ts``     — Optional[int], Unix epoch **milliseconds**
+      (13-digit). The bot always populates this in 3i via
+      ``int(utc_now().timestamp() * 1000)``. Matches Team A's 3g Zod
+      ``.refine(v >= 1e12 && v < 1e14)`` ts-unit guard.
+    """
+
+    symbol: str
+    last: float = Field(gt=0)
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    ts: Optional[int] = None  # Unix epoch milliseconds, 13-digit
 
 
 # ---------------------------------------------------------------------------

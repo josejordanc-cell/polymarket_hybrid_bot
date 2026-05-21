@@ -10,11 +10,14 @@ import asyncio
 import os
 import time
 from collections import defaultdict, deque
+from datetime import datetime
 
 import numpy as np
 import structlog
 
+from api.schemas import PriceTick
 from config.settings import BotConfig
+from utils.fills import get_emitter
 from utils.types import SpotTick
 
 logger = structlog.get_logger(__name__)
@@ -22,6 +25,33 @@ logger = structlog.get_logger(__name__)
 _MAX_BACKOFF = 30.0
 # Number of ticks retained per symbol for z-score computation
 _HISTORY_LEN = 500
+# v0.2.9 3i policy lock 3: TICK WS emit is throttled per (venue, symbol)
+# stream at 250 ms — max 4 frames/sec/stream, ~24/sec aggregate at peak
+# across the configured 3 symbols × 2 venues = 6 streams.
+_TICK_EMIT_INTERVAL_SEC = 0.25
+
+
+def _build_price_tick(symbol: str, price: float, ts: datetime) -> PriceTick:
+    """Build a wire ``PriceTick`` from spot-feed inputs.
+
+    v0.2.9 3i policy locks applied:
+      - Lock 1: ``symbol`` is the venue's native BASE/QUOTE form
+        verbatim (no normalization).
+      - Lock 4: ``bid`` / ``ask`` ship ``None`` in v1 — the feed
+        discards ccxt's ``ticker["bid"]`` / ``["ask"]`` at ingestion.
+      - Lock 5: ``ts`` is ``int(ts.timestamp() * 1000)`` — bot's own
+        ``utc_now()`` converted to 13-digit epoch ms (matches Team A's
+        3g ``.refine(v >= 1e12 && v < 1e14)`` guard).
+      - Lock 6: field names match Zod
+        (``components/dashboard/schemas.ts:211``) byte-for-byte.
+    """
+    return PriceTick(
+        symbol=symbol,
+        last=price,
+        ts=int(ts.timestamp() * 1000),
+        # bid/ask intentionally omitted — Pydantic defaults to None
+        # per 3i policy lock 4. Future sub-phase wires ccxt extraction.
+    )
 
 
 class BinanceFeed:
@@ -44,6 +74,12 @@ class BinanceFeed:
         self._ticks_seen: dict[str, int] = {}
         self._last_tick_at: dict[str, float] = {}
         self._lock = asyncio.Lock()
+        # v0.2.9 3i: per-(venue, symbol) throttle state for TICK WS emit.
+        # time.monotonic() values — immune to wall-clock jumps.
+        self._last_emit: dict[tuple[str, str], float] = {}
+        # Tracks streams that have already logged "tick_emit_started" so
+        # the INFO log fires exactly once per stream per bot startup.
+        self._emit_logged: set[tuple[str, str]] = set()
 
     # ------------------------------------------------------------------
     # Run loop
@@ -128,15 +164,76 @@ class BinanceFeed:
             backoff = min(backoff * 2, _MAX_BACKOFF)
 
     async def _record(self, venue: str, symbol: str, price: float) -> None:
+        # Build SpotTick first so its tz-aware `ts` (datetime via
+        # utc_now()) is the single source of truth for both the
+        # internal history sink AND the wire emit below — keeps the
+        # storage timestamp and the broadcast timestamp identical.
+        tick = SpotTick(
+            venue=venue,  # type: ignore[arg-type]
+            symbol=symbol,
+            price=price,
+        )
         async with self._lock:
             self._price_history[venue][symbol].append(price)
-            self._last_ticks[venue][symbol] = SpotTick(
-                venue=venue,  # type: ignore[arg-type]
-                symbol=symbol,
-                price=price,
-            )
+            self._last_ticks[venue][symbol] = tick
             self._ticks_seen[venue] = self._ticks_seen.get(venue, 0) + 1
             self._last_tick_at[venue] = time.monotonic()
+
+        # v0.2.9 3i: fire-and-forget TICK WS broadcast, throttled per
+        # (venue, symbol) stream at 250 ms. Runs OUTSIDE self._lock so
+        # a slow WS subscriber can't stall the next watch_tickers loop
+        # iteration. _record is already async (called via await from
+        # _run_venue); the asyncio.create_task wrapping keeps the
+        # broadcast itself non-blocking.
+        self._maybe_emit_tick(venue, symbol, price, tick.ts)
+
+    def _maybe_emit_tick(
+        self,
+        venue: str,
+        symbol: str,
+        price: float,
+        ts: datetime,
+    ) -> None:
+        """Throttled fire-and-forget TICK broadcast (v0.2.9 3i).
+
+        Per-stream cap: one frame per ``_TICK_EMIT_INTERVAL_SEC`` (250 ms
+        per 3i policy lock 3). Silently no-ops if no Emitter is
+        registered — matches the ``utils/fills.broadcast_fill`` precedent
+        for headless / test environments. Logs ``tick_emit_started`` at
+        INFO exactly once per (venue, symbol) per bot startup so the
+        path's first firing is visible without ongoing log spam.
+        """
+        now_mono = time.monotonic()
+        key = (venue, symbol)
+        last_emit = self._last_emit.get(key, 0.0)
+        if now_mono - last_emit < _TICK_EMIT_INTERVAL_SEC:
+            return
+        self._last_emit[key] = now_mono
+
+        em = get_emitter()
+        if em is None:
+            return
+
+        if key not in self._emit_logged:
+            self._emit_logged.add(key)
+            logger.info("tick_emit_started", venue=venue, symbol=symbol)
+
+        try:
+            wire = _build_price_tick(symbol, price, ts)
+            asyncio.create_task(
+                em.broadcast(
+                    {"type": "TICK", "payload": wire.model_dump(mode="json")}
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Defensive: feed loop MUST NOT die because of a malformed
+            # tick or a downstream broadcast error.
+            logger.warning(
+                "tick_emit_failed",
+                venue=venue,
+                symbol=symbol,
+                error=str(exc),
+            )
 
     async def _heartbeat_loop(self) -> None:
         while True:
