@@ -55,3 +55,54 @@ shorter if active exploitation is observed.
 - Supply-chain issues (typosquats, hijacked dependencies, compromised
   base-image digests).
 - Container-escape vectors specific to this image.
+
+## Debug-injection endpoints (v0.2.9)
+
+Four `POST /debug/*` endpoints were added during the v0.2.9 wave for
+runtime-smoke purposes:
+
+- `POST /debug/inject-position` — writes a synthetic Position into
+  `BotState.open_positions` AND appends a corresponding `FillRecord`
+  to `BotState.recent_fills`.
+- `POST /debug/clear-positions` — empties both deques.
+- `POST /debug/inject-alert` — fires `utils.alerts.send_alert`
+  internally (state-write + WS broadcast).
+- `POST /debug/inject-log` — fires `utils.logs.log_to_dashboard`
+  internally (state-write only; no LOG WS variant on the dashboard).
+
+**Intended for sim-mode runtime smoke only. Do NOT expose to
+production traffic.**
+
+Each handler enforces five security properties (defense-in-depth):
+
+1. **Sim-mode 404 BEFORE auth.** Handler returns `404 Not Found` when
+   `config.runtime.mode != "sim"`. The 404 fires before the Bearer
+   check — non-sim deployments cannot distinguish "endpoint exists
+   but is disabled" from "endpoint does not exist." The route is
+   registered unconditionally; the gate is enforced inside the
+   handler (`_verify_debug_mode` walks `config.runtime.mode`).
+2. **Bearer auth required.** Same `verify_bearer` surface as
+   `/dashboard/snapshot`; missing or wrong token → 401 (in sim mode
+   only; live mode 404s above).
+3. **Loopback bind expected.** `HttpApiConfig.bind_host` default
+   (`config/settings.py:245`) is `"0.0.0.0"` (frozen surface);
+   production `.env` overrides with `BOT_HTTP_API_BIND_HOST=127.0.0.1`.
+   The mode-gate + Bearer auth provide defense-in-depth if a deploy
+   ever lands without the loopback override.
+4. **Atomic write under `state.write_lock`.** All state mutations
+   happen inside `async with state.write_lock` so snapshot reads stay
+   consistent.
+5. **INFO log audit trail.** Every successful injection logs
+   `debug_position_injected` / `debug_alert_injected` /
+   `debug_log_injected` / `debug_positions_cleared` with the full
+   request payload + resulting id. Pydantic input validation
+   (`InjectPositionRequest`, `InjectAlertPayload`, `InjectLogPayload`)
+   rejects malformed bodies with 400 before any state mutation.
+
+Special case: `POST /debug/inject-log` with `level="debug"` returns
+`204 No Content` (intentional drop per 3f Option C lossy log-level
+map; debug-tier entries do not surface to the dashboard).
+
+See `.swarm-decisions.md` entries `v029-3h`, `v029-3h-fix`,
+`v029-b9-fix`, `v029-b8-logs-wiring` for per-endpoint design
+rationale.

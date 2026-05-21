@@ -503,9 +503,15 @@ class DashboardSnapshot(BaseModel):
     Full snapshot returned by GET /dashboard/snapshot.
     Every field is Optional so the serialiser can emit partial snapshots
     during startup or when sub-systems are unavailable.
-    OQ-3 stub fields (risk_metrics, equity_history, monthly_pnl, backtest,
-    recent_logs, recent_alerts) are present so D.2.3's serialiser can emit
-    empty arrays without schema changes.
+
+    v0.2.9 wired four formerly-OQ-3-stub fields to production sources:
+    ``risk`` (3e — canonical 6-field RiskMetrics computed in
+    ``api/routes_rest.py:_build_riskmetrics``), ``equity`` (B.7 —
+    populated by ``utils.equity_curve.equity_snapshot_loop``),
+    ``logs`` (B.8 — populated by ``utils.logs.log_to_dashboard``),
+    ``alerts`` (B.9 — populated by ``utils.alerts.send_alert``).
+    ``monthlyPnl`` and ``backtest`` remain OQ-3 stubs pending the
+    telemetry pipeline.
     """
 
     # Core portfolio
@@ -522,16 +528,22 @@ class DashboardSnapshot(BaseModel):
     # Strategy configs
     strategyConfigs: Optional[list[StrategyConfig]] = None
 
-    # OQ-3 stub fields — served as empty lists until telemetry is wired (D.2.4+).
-    # v0.2.9 (audit row A.1) renames: riskMetrics → risk, equityHistory → equity,
-    # recentLogs → logs, recentAlerts → alerts. Inner payload shapes unchanged
-    # (those land in sub-phases 3d–3g).
+    # v0.2.9 (audit row A.1) renames: riskMetrics → risk,
+    # equityHistory → equity, recentLogs → logs, recentAlerts → alerts.
+    # Inner payload shapes locked across 3d–3g.
+    #
+    # Wiring status (v0.2.9):
+    #   risk      — LIVE (3e: api/routes_rest.py:_build_riskmetrics)
+    #   equity    — LIVE (B.7: utils.equity_curve.equity_snapshot_loop)
+    #   logs      — LIVE (B.8: utils.logs.log_to_dashboard)
+    #   alerts    — LIVE (B.9: utils.alerts.send_alert)
+    #   monthlyPnl, backtest — OQ-3 stubs (telemetry pipeline pending).
     risk: Optional[RiskMetrics] = None
-    equity: Optional[list[EquityPoint]] = None              # OQ-3 stub
+    equity: Optional[list[EquityPoint]] = None              # B.7 wired
     monthlyPnl: Optional[list[MonthlyPnl]] = None           # OQ-3 stub
     backtest: Optional[list[BacktestPoint]] = None          # OQ-3 stub
-    logs: Optional[list[BotLogEntry]] = None                # OQ-3 stub
-    alerts: Optional[list[AlertItem]] = None                # OQ-3 stub
+    logs: Optional[list[BotLogEntry]] = None                # B.8 wired
+    alerts: Optional[list[AlertItem]] = None                # B.9 wired
 
     # lastUpdatedAt now lives inside globalStats per audit row A.2 — see
     # GlobalStats.lastUpdatedAt and docs/BOT_CONTRACT.md v1.0.

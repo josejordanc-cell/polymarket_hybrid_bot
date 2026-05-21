@@ -290,3 +290,57 @@ If you're returning from the v1 swarm setup:
 - `/orchestrate` and `/swarm-status` commands are new.
 
 See `CHANGELOG.md` in the swarm pack for the full v1 → v2 delta.
+
+## v0.2.9 wave summary
+
+The v0.2.9 wave (Phase 3 sub-phases 3a–3i + the B.7/B.8/B.9/3h/b9-fix
+follow-ups) reconciled the bot's `api/schemas.py` Pydantic models with
+the dashboard's canonical Zod source-of-truth (`~/crypto-trading-bot-dashboard/components/dashboard/schemas.ts`
++ `BOT_CONTRACT.md` v1.0) and wired production sources for the
+formerly-stub `risk`, `equity`, `logs`, and `alerts` snapshot slices.
+Per-sub-phase rationale and decision trail live in
+`.swarm-decisions.md` (look for entries prefixed `v029-`). The
+CHANGELOG.md `[Unreleased]` block has the user-facing summary.
+
+Three operational follow-ups for contributors:
+
+### PATH-A callsite-hook guidance (when to opt in)
+
+`utils.alerts.send_alert` and `utils.logs.log_to_dashboard` are
+explicit opt-in helpers — they exist as a surgical, dashboard-visible
+alternative to bulk-capturing every structlog record. **Hook them
+sparingly:**
+
+- ✅ **Operator-relevant events** the dashboard panel should surface:
+  kill-switch fired, drift alert beyond threshold, intra-arb unwind
+  triggered, market-discovery cycle completed, smart-money copy
+  signal accepted/rejected, etc.
+- ❌ **Tight-loop / retry noise:** polymarket feed reconnect attempts,
+  per-tick heartbeats, ccxt rate-limit retries. These would flood
+  the dashboard's log panel; keep them in structlog only.
+- ❌ **Debug-tier (`level="debug"`) records:** `log_to_dashboard`
+  silently drops these (3f Option C policy). If a record is
+  diagnostic-only, leave it in structlog at debug level.
+
+The principle: the dashboard log panel is operator UX, not a debug
+log. Structlog stays the firehose; `log_to_dashboard`/`send_alert`
+are the curated subset.
+
+### Debug-injection endpoints — sim mode only
+
+`/debug/inject-position`, `/debug/clear-positions`,
+`/debug/inject-alert`, `/debug/inject-log` exist for runtime smoke
+only. They 404 in non-sim mode BEFORE the auth check (so non-sim
+deployments don't acknowledge the endpoints' existence). See
+`SECURITY.md` "Debug-injection endpoints" section for the full
+security model.
+
+### EquityPoint daily-resolution semantics
+
+`BotState.equity_history` carries one `EquityPoint` per UTC calendar
+day (capped at `maxlen=200` ≈ 6.5 months). The
+`equity_snapshot_loop` background task bootstraps today's point on
+bot start, then polls hourly for UTC-day rollovers. A freshly
+restarted bot returns a non-empty `equity_history` from `GET
+/dashboard/snapshot` within seconds — operator smoke does not need
+to wait 24 hours.

@@ -468,6 +468,8 @@ These are secrets, so they follow the existing `SecretStr` pattern (CLAUDE.md ha
 
 D.2.2's first task is to map every field in `DashboardSnapshotSchema` to a source in `RiskManager._state`, the strategy objects, or the executor. Some fields (e.g., `backtest`, `monthlyPnl`, `equity` chart history) may not have direct runtime sources and may require either (a) maintaining a rolling history in `BotState`, (b) serving stub/empty arrays until telemetry is wired, or (c) deferring to the next phase. D.2.2 must make this explicit and document any stubs.
 
+**Resolution (v0.2.9):** `equity` chart history now has a runtime source — `utils.equity_curve.equity_snapshot_loop` (B.7) writes one `EquityPoint` per UTC calendar day to a bounded `BotState.equity_history` (`deque(maxlen=200)`); see `.swarm-decisions.md` entry `v029-b7-equity-wiring`. `risk` is now produced by `api/routes_rest.py:_build_riskmetrics` (3e canonical 6-field RiskMetrics). `logs` and `alerts` are now populated by `utils.logs.log_to_dashboard` (B.8) and `utils.alerts.send_alert` (B.9) respectively. `backtest` and `monthlyPnl` remain OQ-3 stubs pending the future telemetry pipeline.
+
 ### OQ-4: Strategy ID mapping (strategy1/strategy2/strategy3 vs internal names)
 
 The contract uses stable IDs `strategy1`, `strategy2`, `strategy3`. The bot's internal strategy names are `intra_arbitrage`, `momentum_latency`, `market_maker` (and optionally `smart_money_copy`). The mapping must be:

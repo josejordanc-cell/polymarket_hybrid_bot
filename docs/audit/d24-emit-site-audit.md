@@ -267,10 +267,18 @@ Dashboard schemas are canonical. Bot moves. In this batch:
   + `.strategyConfigs` does not match dashboard's
   `StrategyUpdateSchema = z.object({ strategyId, updates })`. Will be
   reconciled in the same-commit-as-wire-up STRATEGY_UPDATE step batch.
+  **RESOLVED in v0.2.9 3i.** `StrategyUpdate` Pydantic now matches Zod's
+  `{strategyId, updates: StrategyUpdateFields}` exactly. Verified by
+  `tests/api/test_schema_contract.py:test_strategy_update_payload_envelope_shape`
+  and `:test_ws_strategy_update_envelope_is_flat`. The
+  STRATEGY_UPDATE emit-site itself remains deferred to the
+  strategy-telemetry pipeline (no telemetry source today).
 - **WsFill envelope drift.** This batch flattens `WsFill.payload` to
   `FillRecord` (matching dashboard), but does NOT verify `FillRecord`
   field-by-field against dashboard `FillSchema`. That verification is
   part of the FILL step batch.
+  **RESOLVED.** Field-by-field verified by
+  `tests/api/test_schema_contract.py:test_fill_record_field_set_matches_dashboard_snapshot`.
 - **`AlertItem.acknowledged` / `.strategy` fields.** Dropped from the bot
   schema. If a future bot-side workflow needs alert-acknowledgement
   tracking or per-strategy alert attribution, dashboard schemas would
@@ -279,6 +287,9 @@ Dashboard schemas are canonical. Bot moves. In this batch:
   `api/schemas.py` envelope shapes match a frozen snapshot of dashboard
   `WsMessageSchema` would have caught this drift. Not added in this
   batch — queued as housekeeping.
+  **RESOLVED.** `tests/api/test_schema_contract.py` ships and runs in
+  CI; covers ALERT, FILL, STRATEGY_UPDATE envelope shapes + canonical
+  field sets.
 
 ### Process note
 

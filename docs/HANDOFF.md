@@ -46,7 +46,7 @@ Background asyncio tasks started from `main.py`: Polymarket WS feed, Binance fee
 ## 4. Risk and execution layer (including new behaviors)
 
 - **Approval:** `RiskManager.approve_orders` enforces kill-switch, position cap, per-trade cap, min notional; **intra_arbitrage bypasses correlation guard**; other strategies use `correlation_blocked`.
-- **Fills:** `on_fill` updates equity, positions (`{market_id}_{outcome}` keys), logs **`fill_recorded`**, updates metrics.
+- **Fills:** `on_fill` updates equity, positions (internal `{market_id}_{outcome}` dict keys), logs **`fill_recorded`**, updates metrics. _Boundary note (v0.2.9 3d-fix):_ the dashboard wire form is the single collapsed string `{market_id}:{outcome}` (note the colon, not the underscore) produced by `api/routes_rest.py:_collapse_position_id`. Internal dict-key form and wire-side string id intentionally differ; the bot's internal storage stays as-is, and only the snapshot serializer applies the collapse.
 - **Settlement:** `on_settlement` clears losing legs, credits winners, logs **`settlement`** per leg; **`market_resolved`** logged from `main.py` after poll applies settlement.
 - **Live reconciliation:** Order submitted → `pending_orders[order_id]` → poll until terminal → `TradeResult` with actual `filled_size` / price.
 - **Arb unwind:** IOC SELL on overfilled side capped by **`BOT_STRAT_ARB_MAX_UNWIND_BPS`**; outcomes **`arb_bundle_balanced`**, **`arb_unwind`**, **`arb_unwind_skipped`**, **`arb_unwind_fill_recorded`**.

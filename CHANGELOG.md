@@ -6,11 +6,127 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Phase E.1 — strategy-id translation at the FILL wire boundary and BotState
-truthfulness for env-driven strategy flags. Branch `feat/intra-arb-dashboard-integration`,
-+2 commits over main.
+### v0.2.9 — Phase 3 wire-shape alignment + snapshot history wiring
 
-### Added
+Bot side of the dashboard contract reconciled with the canonical Zod
+source in `~/crypto-trading-bot-dashboard/components/dashboard/schemas.ts`
++ `BOT_CONTRACT.md` v1.0. Two-team swarm: Team B (this repo)
+authored the bot-side rewrites; Team A handled the parallel dashboard-side
+work. See `.swarm-decisions.md` for per-sub-phase decision log entries.
+
+#### Wire-shape alignment (Phase 3, sub-phases 3a–3i)
+
+- **3a** — `globalStats` field rename + `lastUpdatedAt` relocation
+  (totalEquity → portfolioValue, dayPnl → pnlToday; lastUpdatedAt moved
+  from DashboardSnapshot root into GlobalStats per audit A.2).
+- **3b** — `StrategyConfig` + `riskPct` semantic. `id` → `strategyId`,
+  `riskBudget` (0.0–1.0 fraction) → `riskPct` (0.1–10.0 percent),
+  `activePairs` CSV → list[str] of BASE/QUOTE, default `riskPct=2.5`.
+  Narrow L2 unfreeze on `api/state.py` for the rename.
+- **3c** — Six top-level `DashboardSnapshot` key renames per audit A.1
+  (openPositions → positions, recentFills → fills, riskMetrics → risk,
+  equityHistory → equity, recentLogs → logs, recentAlerts → alerts).
+- **3d** — `positions[]` live wiring + `_collapse_position_id` boundary
+  helper (Polymarket `marketId:outcome` / spot `venue:symbol`).
+- **3d-fix** — `OpenPosition` canonical 11-field Zod shape (side →
+  direction title-case, quantity → size, openedAt → timeOpen ISO-8601-Z,
+  unrealizedPnl → unrealizedPnlUsd; added tradeId). Forward-only
+  correction; the 3d landing followed the deprecated audit B.3 field set.
+- **3d-pre** — Live-blocker microfix: `activePairs` ships `[]` not null,
+  `lastUpdatedAt` ships `int(time.time() * 1000)` not 0 sentinel.
+- **3e** — `RiskMetrics` canonical 6-field Zod shape (maxDrawdown,
+  sharpe, var95, leverage, exposurePct, liquidationRisk). leverage=1.0
+  spot-venue structural constant; other 5 default None pending B.5
+  full-wiring. Drops the v0.2.8 legacy 6-field stub set.
+- **3f** — `EquityPoint` (B.7), `BotLogEntry` (B.8), `AlertItem` (B.9)
+  canonical Pydantic shapes. Option C lossy log-level map at the
+  serializer (debug → drop, critical → ERROR collapse). E.3 alert
+  severity collapse (error → critical). EXEC vestigial slot in Zod log
+  enum; bot never emits it.
+- **3g** — Cross-team recon only (no bot edits). Confirmed no TICK
+  publish path existed pre-3i; Team A then added Zod `.refine()` on
+  PriceTickSchema for the eventual 3i landing.
+- **3h** — `_build_open_position` helper promotes the 3d-fix
+  paste-and-fill recipe to live code; `positions=[]` stub replaced with
+  list-comp. Adds `POST /debug/inject-position` + `POST
+  /debug/clear-positions` (sim-mode-only). Narrow L2 unfreeze on
+  `api/state.py` extended.
+- **3h-fix** — `_verify_debug_mode` reads `config.runtime.mode` (not
+  `config.mode`); MagicMock auto-attribute creation had masked the bug
+  in tests.
+- **3i** — `PriceTick` canonical 5-field Zod shape (symbol, last, bid?,
+  ask?, ts epoch ms). Adds production TICK WS emit in
+  `data_feeds/binance_feed._record` with per-(venue, symbol) 250ms
+  throttle. bid/ask ship null in v1 (no SpotTick struct change).
+  ts = `int(utc_now().timestamp() * 1000)` 13-digit, satisfies Team A's
+  3g `.refine(v >= 1e12 && v < 1e14)` guard.
+
+#### Snapshot history wiring (BotState writers for previously-stub slices)
+
+- **B.9 alerts** — `utils.alerts._broadcast_dashboard` atomically
+  appends a wire-shape AlertItem to `BotState.recent_alerts` under
+  `state.write_lock` BEFORE the WS broadcast. Reconnecting client sees
+  alert in snapshot even if WS frame in-flight. New
+  `api.state.set_state` / `get_state` module-level accessors (mirrors
+  `utils.alerts.set_emitter` precedent); registered in `api/server.py`
+  alongside emitter wiring. Snapshot path's `alerts=[]` stub flipped to
+  `list(snap.recent_alerts)`.
+- **b9-fix** — `POST /debug/inject-alert` endpoint (sim-mode-only)
+  fires `send_alert` internally so the full B.9 production path
+  (state.recent_alerts + WS broadcast) is exercisable via curl. Same
+  5 security gates as `inject-position`. `test_client` fixture also
+  updated to call `set_state(bot_state)` so the singleton is
+  registered in tests (production wiring at `api/server.py` was
+  already correct).
+- **B.8 logs** — New `utils/logs.py` module with `log_to_dashboard`
+  PATH-A opt-in helper. State-only (no WS broadcast — Zod
+  `WsMessageSchema` has no LOG variant). 3f Option C lossy level map
+  applied inside helper. `source` folded into `message` as
+  `[{source}] {message}` (4-field BotLogEntry has no source field).
+  `_LOG_LEVEL_MAP` + `_map_log_level` moved from `api/routes_rest.py`
+  (3f speculative landing) to `utils/logs.py` natural home;
+  `TestMapLogLevel` test class moved alongside. Snapshot path's
+  `logs=[]` stub flipped to `list(snap.recent_logs)`. New `POST
+  /debug/inject-log` endpoint (sim-mode-only); returns 204 No Content
+  on `level="debug"` (intentional drop per Option C). No existing bot
+  paths hooked to `log_to_dashboard` in this round; callsite curation
+  deferred.
+- **B.7 equity** — New `utils/equity_curve.py` module with
+  `equity_snapshot_loop` background task. Bootstrap-append on loop
+  start so a freshly-restarted bot returns a non-empty
+  `equity_history` from `GET /dashboard/snapshot` within seconds; then
+  hourly tick with UTC-day-rollover detection (one EquityPoint per
+  calendar day, `pnl = state.equity - state.day_start_equity`).
+  Lifecycle: created in `api/server.py:run()` alongside emitter/state
+  wiring, cancelled + awaited in finally block. `BotState.equity_history`
+  promoted from unbounded list to `deque(maxlen=200)` (~6.5 months of
+  daily-close history). Snapshot path's `equity=[]` stub flipped to
+  `list(snap.equity_history)`.
+
+#### Tests
+
+- Test count: 144 (post-3a baseline) → 303 (post-B.7). Net +159 over
+  the v0.2.9 wave across schema round-trips, helper unit tests,
+  endpoint integration tests, and lifecycle / cancellation tests.
+- New `tests/api/test_schema_contract.py` is now the canonical
+  cross-team schema-drift guard (verifies field sets + envelope shapes
+  against the dashboard's canonical contract).
+
+#### Removed / deprecated
+
+- Audit row B.3 (10-field OpenPosition w/ side / quantity / openedAt
+  / unrealizedPnl) deprecated by A-2 reconciliation matrix; canonical
+  11-field Zod shape is authoritative (3d-fix).
+- Audit row B.5 (10-field RiskMetrics) deprecated; canonical 6-field
+  Zod shape is authoritative (3e).
+
+### Earlier in the [Unreleased] window — Phase E.1 (pre-v0.2.9 wave)
+
+Strategy-id translation at the FILL wire boundary and BotState
+truthfulness for env-driven strategy flags. Branch
+`feat/intra-arb-dashboard-integration`, +2 commits over main.
+
+#### Added (Phase E.1)
 
 - **B.1 — FILL strategy-id translation** (commit `b3558ef`): `bot_to_dashboard()` /
   `dashboard_to_bot()` helpers in `api/schemas.py`. FILL payload in `utils/fills.py:108`
