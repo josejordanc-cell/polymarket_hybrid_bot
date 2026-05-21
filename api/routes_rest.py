@@ -169,12 +169,66 @@ def _collapse_position_id(pos: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_snapshot(snap: BotState) -> DashboardSnapshot:
-    """Build a DashboardSnapshot from a shallow-copy BotState.
+def _build_riskmetrics(snap: BotState, config: Any) -> RiskMetrics:
+    """Build a wire RiskMetrics from a snapshot + config (v0.2.9 B.1).
+
+    Orchestrates the five pure-function helpers in ``utils.risk_metrics``
+    plus the spot-venue ``leverage = 1.0`` structural constant from 3e.
+    Reads ``config.risk.daily_drawdown_limit_pct`` defensively via a
+    getattr chain so a partial config / MagicMock without a ``risk``
+    attribute degrades gracefully (``liquidationRisk = None`` rather
+    than raising).
+
+    All five helpers return ``None`` cleanly on degenerate input
+    (empty equity_history, insufficient samples, zero equity). The
+    ``RiskMetrics`` Pydantic accepts ``None`` for the five nullable
+    fields per 3e canonical shape.
+    """
+    from utils.risk_metrics import (
+        compute_exposure_pct,
+        compute_liquidation_risk,
+        compute_max_drawdown,
+        compute_sharpe,
+        compute_var95_usd,
+    )
+
+    # daily_drawdown_limit_pct lives at cfg.risk.daily_drawdown_limit_pct
+    # (config/settings.py:161). Defensive getattr chain: a partial config
+    # without .risk falls through to None → liquidationRisk is None.
+    # The isinstance check below is also defense-in-depth: a bare
+    # MagicMock without spec auto-vivifies any attribute as a MagicMock
+    # (not a float), and the threshold comparison inside the helper
+    # would raise TypeError. The 3h-fix lesson applies here too.
+    risk_cfg = getattr(config, "risk", None)
+    daily_limit_frac = getattr(risk_cfg, "daily_drawdown_limit_pct", None)
+
+    liquidation_risk = (
+        compute_liquidation_risk(
+            day_start_equity=snap.day_start_equity,
+            equity=snap.equity,
+            daily_drawdown_limit_pct=daily_limit_frac,
+        )
+        if isinstance(daily_limit_frac, (int, float))
+        else None
+    )
+
+    return RiskMetrics(
+        maxDrawdown=compute_max_drawdown(snap.equity_history),
+        sharpe=compute_sharpe(snap.equity_history),
+        var95=compute_var95_usd(snap.equity_history, snap.equity),
+        leverage=1.0,  # 3e structural constant: Polymarket spot is non-leveraged
+        exposurePct=compute_exposure_pct(snap.open_positions, snap.equity),
+        liquidationRisk=liquidation_risk,
+    )
+
+
+def _build_snapshot(snap: BotState, config: Any) -> DashboardSnapshot:
+    """Build a DashboardSnapshot from a shallow-copy BotState + config.
 
     Pure function — does not touch the original BotState or any lock.
-    OQ-3 fields (positions, history, logs, alerts, metrics) are stub
-    empties until D.2.4 wires telemetry.
+    ``config`` is read for the B.1 RiskMetrics computation
+    (``cfg.risk.daily_drawdown_limit_pct``); other slices read from
+    ``snap`` only.
     """
     day_pnl = snap.equity - snap.day_start_equity
 
@@ -259,14 +313,14 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
             _build_open_position(p) for p in snap.open_positions.values()
         ],
         fills=list(snap.recent_fills),
-        # v0.2.9 3e: emit a zero-arg RiskMetrics() — canonical 6-field
-        # shape per components/dashboard/schemas.ts:96 + BOT_CONTRACT.md
-        # v1.0 line 119. Five fields default to None (Zod nullable);
-        # leverage defaults to 1.0 (spot-venue structural constant —
-        # see RiskMetrics docstring). Real values for the five nullable
-        # fields land with B.5 full wiring (equity-history + mark-
-        # pricing pipelines).
-        risk=RiskMetrics(),
+        # v0.2.9 B.1: snapshot-build-time RiskMetrics computation
+        # (PATH C). _build_riskmetrics orchestrates five pure-function
+        # helpers in utils.risk_metrics + the 3e leverage=1.0 structural
+        # constant. All five computed fields degrade to None when the
+        # snapshot lacks sufficient samples or has degenerate values
+        # (zero equity, etc.). See .swarm-decisions.md v029-b1-risk-wiring
+        # for the 11 coordinator-locked decisions.
+        risk=_build_riskmetrics(snap, config),
         # equity: v0.2.9 B.7 wires this live. Wire-shape EquityPoint
         # instances are appended to BotState.equity_history by
         # utils.equity_curve.equity_snapshot_loop — a long-lived
@@ -313,8 +367,10 @@ async def snapshot_handler(request: web.Request, state: BotState, config: Any) -
         return web.Response(status=401, text="Unauthorized")
     async with state.write_lock:
         snap = state.shallow_copy()
-    # Build DashboardSnapshot from snap OUTSIDE the lock (see D.2.1 §D-4)
-    snapshot = _build_snapshot(snap)
+    # Build DashboardSnapshot from snap OUTSIDE the lock (see D.2.1 §D-4).
+    # v0.2.9 B.1: config threaded through for RiskMetrics computation
+    # (read of cfg.risk.daily_drawdown_limit_pct for liquidationRisk).
+    snapshot = _build_snapshot(snap, config)
     logger.info("snapshot_served", last_updated_at_ms=snap.last_updated_at_ms)
     return web.json_response(snapshot.model_dump(mode="json"))
 

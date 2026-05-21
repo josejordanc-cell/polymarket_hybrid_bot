@@ -39,6 +39,15 @@ def bot_config() -> MagicMock:
     # the debug routes are reachable in tests; per-test override to
     # ``bot_config.runtime.mode = "live"`` for the 404-gate tests.
     config.runtime.mode = "sim"
+    # v0.2.9 B.1: _build_riskmetrics reads
+    # ``config.risk.daily_drawdown_limit_pct`` for the liquidationRisk
+    # computation (lock 11). Without this explicit set, MagicMock's
+    # auto-attribute creation returns a MagicMock instance which is
+    # neither None nor a float — the helper raises TypeError on the
+    # threshold comparison. Setting the production-realistic default
+    # (0.12 = 12% per config/settings.py:161) makes the fixture match
+    # real-config behavior. Per-test override is fine.
+    config.risk.daily_drawdown_limit_pct = 0.12
     return config
 
 

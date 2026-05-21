@@ -238,8 +238,14 @@ class TestSnapshotHandler:
         # risk: zero-arg RiskMetrics() stub — canonical 6-field shape
         # per v0.2.9 3e (components/dashboard/schemas.ts:96 +
         # BOT_CONTRACT.md v1.0 line 119). leverage=1.0 (spot-venue
-        # structural constant); other 5 fields None until B.5 full
-        # wiring lands.
+        # structural constant). v0.2.9 B.1 (PATH C) populates the
+        # other 5 fields via utils.risk_metrics helpers:
+        #   - maxDrawdown / sharpe / var95: null (fixture has no
+        #     equity_history; helpers return None for insufficient data)
+        #   - exposurePct: 0.0 (empty positions over positive equity =
+        #     0% exposure per lock 7 — semantically NOT null)
+        #   - liquidationRisk: "low" (fixture equity=10000 > day_start=9500
+        #     → no intra-day drawdown → lock-11 threshold table returns "low")
         assert body["risk"] is not None
         assert isinstance(body["risk"], dict)
         assert list(body["risk"].keys()) == [
@@ -254,8 +260,8 @@ class TestSnapshotHandler:
         assert body["risk"]["maxDrawdown"] is None
         assert body["risk"]["sharpe"] is None
         assert body["risk"]["var95"] is None
-        assert body["risk"]["exposurePct"] is None
-        assert body["risk"]["liquidationRisk"] is None
+        assert body["risk"]["exposurePct"] == 0.0
+        assert body["risk"]["liquidationRisk"] == "low"
         # Legacy 5bc2b6b stub field names must NOT appear in the wire payload.
         for legacy_risk_key in (
             "currentDrawdown",
@@ -1632,3 +1638,157 @@ class TestSnapshotEquityHistory:
         body = await resp.json()
         assert body["equity"] == []
         assert isinstance(body["equity"], list)
+
+
+# ---------------------------------------------------------------------------
+# v0.2.9 B.1 — RiskMetrics computed at snapshot-build time (PATH C)
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotRiskMetricsAfterB1Wiring:
+    """v0.2.9 B.1: _build_riskmetrics orchestrates the 5 pure-function
+    helpers from utils/risk_metrics.py. Verify end-to-end via the
+    snapshot path that previously-null fields now carry real values
+    when sufficient input data is present, AND degrade cleanly to null
+    on insufficient data.
+
+    Note: bot_config is a MagicMock by default — config.risk and
+    config.risk.daily_drawdown_limit_pct auto-create as MagicMock
+    instances. For liquidation-risk-specific assertions, individual
+    tests set the value explicitly.
+    """
+
+    async def test_empty_state_yields_null_except_leverage(
+        self, test_client, bot_config, bot_state
+    ):
+        """Fresh BotState (no equity_history, no positions, fresh equity):
+        - maxDrawdown: null (need ≥2 points)
+        - sharpe: null (need ≥20 returns)
+        - var95: null (need ≥21 returns)
+        - leverage: 1.0 (3e structural constant)
+        - exposurePct: 0.0 (empty positions, positive equity)
+        - liquidationRisk: 'low' (no intra-day drawdown)
+        """
+        # Set the daily_drawdown_limit_pct on the MagicMock so the
+        # liquidation-risk helper has a real number to compare.
+        bot_config.risk.daily_drawdown_limit_pct = 0.12
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        risk = body["risk"]
+        # Wire order must remain canonical (lock; verified per 3e).
+        assert list(risk.keys()) == [
+            "maxDrawdown",
+            "sharpe",
+            "var95",
+            "leverage",
+            "exposurePct",
+            "liquidationRisk",
+        ]
+        assert risk["maxDrawdown"] is None
+        assert risk["sharpe"] is None
+        assert risk["var95"] is None
+        assert risk["leverage"] == 1.0
+        assert risk["exposurePct"] == 0.0
+        # No intra-day drawdown (equity == day_start_equity from fixture).
+        assert risk["liquidationRisk"] == "low"
+
+    async def test_populated_state_yields_real_values(
+        self, test_client, bot_config, bot_state
+    ):
+        """Synthetic equity_history with ≥22 points + open positions →
+        all 5 computed fields show non-null values. Verifies wire-shape
+        contracts (percent for drawdown/exposure, USD for var95,
+        enum for liquidationRisk)."""
+        from api.schemas import EquityPoint
+        from utils.types import Position
+
+        bot_config.risk.daily_drawdown_limit_pct = 0.12
+
+        # Build 22 daily points: mix of small gains and losses so
+        # sharpe + var95 + maxDrawdown all have material data.
+        equities = [10000.0]
+        deltas = [
+            0.005, -0.01, 0.008, -0.015, 0.012, -0.02, 0.003,
+            -0.005, 0.01, -0.008, 0.005, -0.012, 0.007, -0.01,
+            0.004, -0.02, 0.011, -0.008, 0.006, -0.015, 0.009,
+        ]
+        for d in deltas:
+            equities.append(equities[-1] * (1.0 + d))
+
+        for i, eq in enumerate(equities):
+            bot_state.equity_history.append(
+                EquityPoint(day=f"2026-05-{i+1:02d}", equity=eq, pnl=0.0)
+            )
+
+        # Add two open positions for exposurePct.
+        bot_state.open_positions["k1"] = Position(
+            market_id="0xabc",
+            outcome="YES",
+            quantity=100.0,
+            avg_price=0.55,
+            strategy="intra_arbitrage",
+        )
+        bot_state.open_positions["k2"] = Position(
+            market_id="0xdef",
+            outcome="NO",
+            quantity=50.0,
+            avg_price=0.40,
+            strategy="momentum_latency",
+        )
+
+        # Adjust bot_state.equity to introduce a small intra-day
+        # drawdown so liquidationRisk has a non-trivial value to check.
+        # day_start_equity=9500 from the fixture; set equity below to
+        # produce ~5% dd (well under the 12% limit → "low").
+        bot_state.equity = 9100.0  # 4.2% dd from day_start 9500
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        risk = body["risk"]
+
+        # leverage is unchanged.
+        assert risk["leverage"] == 1.0
+
+        # maxDrawdown is a positive percent (lock 1 + 2).
+        assert risk["maxDrawdown"] is not None
+        assert risk["maxDrawdown"] > 0.0
+        assert isinstance(risk["maxDrawdown"], float)
+
+        # sharpe is finite (could be positive or negative).
+        assert risk["sharpe"] is not None
+        assert isinstance(risk["sharpe"], float)
+
+        # var95 is a positive USD figure (lock 10).
+        assert risk["var95"] is not None
+        assert risk["var95"] > 0.0
+        assert isinstance(risk["var95"], float)
+
+        # exposurePct: (100*0.55 + 50*0.40) / 9100 * 100 = 75/9100 * 100 ≈ 0.824
+        assert risk["exposurePct"] is not None
+        assert risk["exposurePct"] == pytest.approx(75.0 / 9100.0 * 100.0)
+
+        # liquidationRisk: ~4.2% dd vs 12% limit → 35% of limit → "low".
+        assert risk["liquidationRisk"] == "low"
+
+    async def test_high_drawdown_yields_high_liquidation_risk(
+        self, test_client, bot_config, bot_state
+    ):
+        """Push equity deep enough that intra-day drawdown ≥ 80% of
+        daily_drawdown_limit_pct → liquidationRisk = 'high'."""
+        bot_config.risk.daily_drawdown_limit_pct = 0.12
+        # day_start 9500 → set equity to 8500 = ~10.5% dd → 87% of limit → "high".
+        bot_state.equity = 8500.0
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["risk"]["liquidationRisk"] == "high"
