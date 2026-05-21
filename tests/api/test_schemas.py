@@ -121,72 +121,92 @@ def test_strategycarddata_invalid_status() -> None:
 
 
 def test_openposition_round_trip() -> None:
-    """v0.2.9 (audit row B.3 + L2 E.1): nine-field wire shape; single
-    collapsed ``id``; ``symbol`` is BASE/QUOTE; ``side`` is lowercase."""
+    """v0.2.9 3d-fix: canonical 11-field Zod shape per
+    components/dashboard/schemas.ts:67 + BOT_CONTRACT.md v1.0 line 115.
+    direction is title-case Long|Short; timeOpen is ISO 8601 UTC with
+    Z suffix."""
     pos = OpenPosition(
         id="MKT-BTC-001:YES",
-        symbol="BTC/USDT",
-        side="long",
-        quantity=50.0,
+        tradeId="MKT-BTC-001:YES",
+        symbol="MKT-BTC-001",
+        strategy="strategy1",
+        direction="Long",
         entryPrice=0.55,
         currentPrice=0.60,
-        unrealizedPnl=2.5,
+        size=50.0,
         unrealizedPnlPct=9.09,
-        openedAt=1700000000000,
+        unrealizedPnlUsd=2.5,
+        timeOpen="2026-05-21T13:00:00Z",
     )
     data = pos.model_dump(mode="json")
     pos2 = OpenPosition.model_validate(data)
     assert pos2.id == "MKT-BTC-001:YES"
-    assert pos2.symbol == "BTC/USDT"
-    assert pos2.side == "long"
-    assert pos2.quantity == 50.0
+    assert pos2.tradeId == "MKT-BTC-001:YES"
+    assert pos2.symbol == "MKT-BTC-001"
+    assert pos2.strategy == "strategy1"
+    assert pos2.direction == "Long"
     assert pos2.entryPrice == 0.55
     assert pos2.currentPrice == 0.60
-    assert pos2.unrealizedPnl == 2.5
+    assert pos2.size == 50.0
     assert pos2.unrealizedPnlPct == 9.09
-    assert pos2.openedAt == 1700000000000
-    # Legacy field names removed per audit B.3 / L2 E.1
-    for legacy in ("marketId", "outcome", "direction", "avgPrice",
-                   "unrealisedPnl", "strategy"):
+    assert pos2.unrealizedPnlUsd == 2.5
+    assert pos2.timeOpen == "2026-05-21T13:00:00Z"
+    # Legacy field names from f9d1314 (the wrong audit row B.3 shape)
+    # must NOT round-trip via the model dump.
+    for legacy in (
+        "side",          # superseded by direction (title case)
+        "quantity",      # superseded by size
+        "openedAt",      # superseded by timeOpen (ISO 8601 UTC)
+        "unrealizedPnl", # superseded by unrealizedPnlUsd
+        "marketId",      # internal-only; collapsed into id
+        "outcome",       # internal-only; collapsed into id
+        "avgPrice",      # superseded by entryPrice
+        "unrealisedPnl", # legacy British-English spelling
+    ):
         assert legacy not in data
 
 
-def test_openposition_invalid_side() -> None:
-    """v0.2.9 (L2 E.1): side enum is lowercase ``long`` / ``short``."""
+def test_openposition_direction_is_title_case() -> None:
+    """v0.2.9 3d-fix: BOT_CONTRACT.md v1.0 line 472 mandates title case
+    Long|Short for direction. Lowercase long/short (from the f9d1314
+    landing) must be rejected."""
     with pytest.raises(ValidationError):
         OpenPosition(
             id="pos-bad",
-            symbol="BTC/USDT",
-            side="Long",  # uppercase no longer valid
-            quantity=10.0,
+            tradeId="pos-bad",
+            symbol="MKT-X",
+            strategy="strategy1",
+            direction="long",  # lowercase no longer valid
             entryPrice=0.5,
             currentPrice=0.5,
-            unrealizedPnl=0.0,
+            size=10.0,
             unrealizedPnlPct=0.0,
-            openedAt=1700000000000,
+            unrealizedPnlUsd=0.0,
+            timeOpen="2026-05-21T13:00:00Z",
         )
 
 
-def test_openposition_rejects_legacy_required_fields() -> None:
-    """v0.2.9 (audit row B.3): the old shape (marketId, outcome,
-    direction, avgPrice, unrealisedPnl, strategy) is no longer
-    accepted. Per pydantic v2's default extras-ignore policy these
-    keys are silently dropped — so construction fails because the new
-    required fields are missing. This documents the practical effect
-    for downstream callers."""
+def test_openposition_rejects_legacy_field_set() -> None:
+    """v0.2.9 3d-fix: the f9d1314 shape (side, quantity, openedAt,
+    unrealizedPnl as float epoch-ms timeOpen) is no longer accepted.
+    Per pydantic v2 default extras-ignore policy these keys are
+    silently dropped; construction fails because the new required
+    fields are missing. Documents the practical effect for
+    downstream callers."""
     with pytest.raises(ValidationError):
         OpenPosition(
             id="pos-bad",
-            marketId="MKT-BTC-001",      # old key, ignored
-            outcome="YES",                # old key, ignored
-            direction="Long",             # old key, ignored
-            avgPrice=0.5,                 # old key, ignored
-            unrealisedPnl=0.0,            # old key, ignored
-            strategy="strategy1",         # old key, ignored
-            quantity=10.0,
-            openedAt=1700000000000,
-            # symbol, side, entryPrice, currentPrice, unrealizedPnl,
-            # unrealizedPnlPct all omitted → ValidationError
+            side="long",                  # f9d1314 key — ignored
+            quantity=10.0,                 # f9d1314 key — ignored
+            openedAt=1700000000000,        # f9d1314 key — ignored
+            unrealizedPnl=0.0,             # f9d1314 key — ignored
+            symbol="MKT-X",
+            strategy="strategy1",
+            entryPrice=0.5,
+            currentPrice=0.5,
+            unrealizedPnlPct=0.0,
+            # tradeId, direction, size, unrealizedPnlUsd, timeOpen
+            # all omitted → ValidationError
         )
 
 

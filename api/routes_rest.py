@@ -166,16 +166,29 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         # attributes (snap.open_positions, snap.recent_fills, etc.) are
         # internal — only the wire-facing kwargs here changed.
         #
-        # positions: stays as `[]` OQ-3 stub for now. The wire-shape
-        # OpenPosition (v0.2.9 audit row B.3 + L2 E.1) requires four
-        # fields (currentPrice, unrealizedPnl, unrealizedPnlPct, symbol
-        # as BASE/QUOTE) that the bot's internal utils.types.Position
-        # does not surface today. The collapse helper
-        # _collapse_position_id() above is the boundary's id-rewriting
-        # piece; full internal→wire mapping (synthesising the missing
-        # mark/pnl fields from risk-pricing state) is deferred to the
-        # position-telemetry wiring sub-phase. See OpenPosition
-        # docstring in api/schemas.py for the full wire contract.
+        # positions: stays as `[]` OQ-3 stub for now. v0.2.9 3d-fix
+        # established the canonical 11-field wire shape (see
+        # api/schemas.py:OpenPosition docstring); the bot's internal
+        # utils.types.Position lacks four required wire fields
+        # (tradeId, currentPrice, unrealizedPnlUsd, unrealizedPnlPct).
+        # When B.1 fill runtime lands and positions become populated,
+        # build each OpenPosition inline here using the locked policy
+        # (Jose, 2026-05-21):
+        #   id              = _collapse_position_id(pos)
+        #   tradeId         = id                        # stopgap, same value
+        #   symbol          = pos.market_id[:12]        # display-only
+        #   strategy        = pos.strategy
+        #   direction       = "Long" if pos.outcome == "YES" else "Short"
+        #   entryPrice      = pos.avg_price
+        #   currentPrice    = entryPrice                # stopgap until mark
+        #   size            = pos.quantity
+        #   unrealizedPnlPct = 0.0                      # stopgap until mark
+        #   unrealizedPnlUsd = 0.0                      # stopgap until mark
+        #   timeOpen        = pos.opened_at.astimezone(timezone.utc)
+        #                        .isoformat().replace("+00:00", "Z")
+        # The conversion test in tests/api/test_routes_rest.py exercises
+        # this contract against a synthetic Position fixture; the
+        # production loop body lands with B.1 fill runtime.
         positions=[],       # OQ-3 stub
         fills=list(snap.recent_fills),
         # v0.2.9 stopgap: emit a zero-arg RiskMetrics() (all fields None

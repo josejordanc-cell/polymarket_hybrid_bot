@@ -18,7 +18,12 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from api.routes_rest import _collapse_position_id, setup_routes
-from api.schemas import DashboardSnapshot, StopResponse, StrategyRuntimeConfig
+from api.schemas import (
+    DashboardSnapshot,
+    OpenPosition,
+    StopResponse,
+    StrategyRuntimeConfig,
+)
 from api.state import BotState
 
 
@@ -612,3 +617,101 @@ class TestCollapsePositionId:
             _collapse_position_id({"foo": "bar"})
         with pytest.raises(ValueError):
             _collapse_position_id({})
+
+
+# ---------------------------------------------------------------------------
+# test_open_position_wire_shape_matches_zod (v0.2.9 3d-fix)
+# ---------------------------------------------------------------------------
+
+
+def test_open_position_wire_shape_matches_zod() -> None:
+    """v0.2.9 3d-fix regression guard. Constructs an OpenPosition from a
+    representative internal Position fixture using the locked policy
+    (Jose, 2026-05-21) — tradeId=id, currentPrice=entryPrice,
+    unrealizedPnl{Pct,Usd}=0.0, timeOpen=ISO-8601-UTC-with-Z — and
+    asserts the model_dump output's key SEQUENCE matches the 11-field
+    Zod set in exact order per
+    ``crypto-trading-bot-dashboard/components/dashboard/schemas.ts:67``
+    and ``BOT_CONTRACT.md`` v1.0 line 115.
+
+    The hardcoded key list is the regression contract: if Zod adds,
+    removes, or reorders a field, this test must fail.
+    """
+    from datetime import datetime, timezone
+
+    # Internal Position-shaped fixture (mirrors utils.types.Position).
+    internal_pos = {
+        "market_id": "0xabc",
+        "outcome": "YES",
+        "quantity": 50.0,
+        "avg_price": 0.55,
+        "strategy": "strategy1",
+        "opened_at": datetime(2026, 5, 21, 13, 0, 0, tzinfo=timezone.utc),
+    }
+
+    # Apply the locked-policy conversion (the same logic that lands in
+    # _build_snapshot when B.1 fill runtime ships).
+    pos_id = _collapse_position_id(internal_pos)
+    time_open = (
+        internal_pos["opened_at"]
+        .astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    direction = "Long" if internal_pos["outcome"] == "YES" else "Short"
+    entry_price = internal_pos["avg_price"]
+
+    wire = OpenPosition(
+        id=pos_id,
+        tradeId=pos_id,                           # stopgap: same as id
+        symbol=internal_pos["market_id"][:12],    # display-only truncate
+        strategy=internal_pos["strategy"],
+        direction=direction,
+        entryPrice=entry_price,
+        currentPrice=entry_price,                  # stopgap: mark = entry
+        size=internal_pos["quantity"],
+        unrealizedPnlPct=0.0,                      # stopgap: needs mark
+        unrealizedPnlUsd=0.0,                      # stopgap: needs mark
+        timeOpen=time_open,
+    )
+
+    data = wire.model_dump(mode="json")
+
+    # 1. Exact 11-field key set, in Zod order.
+    expected_keys = [
+        "id",
+        "tradeId",
+        "symbol",
+        "strategy",
+        "direction",
+        "entryPrice",
+        "currentPrice",
+        "size",
+        "unrealizedPnlPct",
+        "unrealizedPnlUsd",
+        "timeOpen",
+    ]
+    assert list(data.keys()) == expected_keys
+
+    # 2. tradeId equals id under the v0.2.9 3d-fix stopgap policy.
+    assert data["tradeId"] == data["id"] == "0xabc:YES"
+
+    # 3. direction is title case (BOT_CONTRACT.md line 472).
+    assert data["direction"] in ("Long", "Short")
+    assert data["direction"] == "Long"
+
+    # 4. timeOpen is ISO 8601 UTC with Z suffix — regex check.
+    import re
+    assert re.match(
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$", data["timeOpen"]
+    ), f"timeOpen {data['timeOpen']!r} does not match ISO-8601-UTC-Z"
+    assert data["timeOpen"] == "2026-05-21T13:00:00Z"
+
+    # 5. PnL stopgaps: both 0.0 and float-typed.
+    assert data["unrealizedPnlPct"] == 0.0
+    assert data["unrealizedPnlUsd"] == 0.0
+    assert isinstance(data["unrealizedPnlPct"], float)
+    assert isinstance(data["unrealizedPnlUsd"], float)
+
+    # 6. currentPrice == entryPrice (stopgap: mark trivially equals entry).
+    assert data["currentPrice"] == data["entryPrice"]

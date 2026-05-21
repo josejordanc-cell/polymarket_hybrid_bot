@@ -126,42 +126,56 @@ class StrategyCardData(BaseModel):
 
 
 class OpenPosition(BaseModel):
-    """Mirrors dashboard OpenPositionSchema.
+    """Mirrors dashboard OpenPositionSchema — canonical Zod source at
+    ``components/dashboard/schemas.ts:67`` + ``BOT_CONTRACT.md`` v1.0
+    line 115. Eleven fields, all required, in wire order.
 
-    v0.2.9 (audit row B.3 + L2 decision E.1): the wire shape is nine
-    fields. The bot's internal (marketId, outcome) split — preserved on
-    ``utils.types.Position`` and ``BotState.open_positions`` — is
-    collapsed to a single ``id`` at the wire boundary by
-    ``api/routes_rest.py:_collapse_position_id``:
+    v0.2.9 sub-phase 3d-fix corrects the 3d landing (f9d1314) which
+    followed the now-deprecated audit row B.3 (different field names).
+    Team A's A-2 reconciliation matrix established that BOT_CONTRACT +
+    Zod are canonical and agree; the audit doc was the outlier.
 
-    - Polymarket positions: ``id = f"{marketId}:{outcome}"`` (e.g.
-      ``"0xabc:YES"``).
-    - Spot venue positions: ``id = f"{venue}:{symbol}"`` (e.g.
-      ``"binance:BTC/USDT"``).
+    Wire fields (in Zod order):
 
-    Wire fields:
-
-    - ``id``        — collapsed identifier (see above).
-    - ``symbol``    — BASE/QUOTE format (e.g. ``"BTC/USDT"``).
-    - ``side``      — ``"long"`` or ``"short"`` (lowercase per
-      dashboard enum).
-    - ``quantity``  — number.
-    - ``entryPrice``       — number.
-    - ``currentPrice``     — number (mark price at snapshot time).
-    - ``unrealizedPnl``    — number, USD.
-    - ``unrealizedPnlPct`` — number, percent (e.g. 1.5 = +1.5%).
-    - ``openedAt`` — epoch ms.
+    - ``id``                — collapsed identifier (see
+      ``api/routes_rest.py:_collapse_position_id``). For Polymarket:
+      ``f"{marketId}:{outcome}"``; for spot: ``f"{venue}:{symbol}"``.
+    - ``tradeId``           — per-fill trade identifier. v0.2.9 stopgap
+      (Decision B): bot ships ``tradeId = id`` because internal
+      ``utils.types.Position`` has no per-fill id. TODO(B.3-wiring)
+      when B.1 fill runtime lands.
+    - ``symbol``            — display symbol (Polymarket: a truncated
+      market_id; spot: BASE/QUOTE).
+    - ``strategy``          — strategy identifier (free string, not
+      ``StrategyId`` enum — dashboard treats this loosely).
+    - ``direction``         — ``"Long"`` or ``"Short"`` (title case per
+      ``BOT_CONTRACT.md`` line 472; lowercase ``long``/``short`` from
+      the previous f9d1314 landing was wrong).
+    - ``entryPrice``        — number, entry price.
+    - ``currentPrice``      — number, mark price. TODO(B.3-wiring):
+      currently stubbed to ``entryPrice`` so PnL math trivially
+      resolves to 0.0; wire real mark when B.1 fill runtime lands.
+    - ``size``              — number (renamed from ``quantity`` in 3d-fix).
+    - ``unrealizedPnlPct``  — number, percent. TODO(B.3-wiring): 0.0
+      until mark-pricing surfaces.
+    - ``unrealizedPnlUsd``  — number, USD. TODO(B.3-wiring): 0.0 until
+      mark-pricing surfaces.
+    - ``timeOpen``          — ISO 8601 UTC string with ``Z`` suffix
+      (e.g. ``"2026-05-21T13:00:00Z"``). Renamed from epoch-ms
+      ``openedAt`` in 3d-fix.
     """
 
     id: str
+    tradeId: str
     symbol: str
-    side: Literal["long", "short"]
-    quantity: float
+    strategy: str
+    direction: Literal["Long", "Short"]
     entryPrice: float
     currentPrice: float
-    unrealizedPnl: float
+    size: float
     unrealizedPnlPct: float
-    openedAt: int  # epoch ms
+    unrealizedPnlUsd: float
+    timeOpen: str
 
 
 # ---------------------------------------------------------------------------
