@@ -208,18 +208,24 @@ def test_fillrecord_optional_fields_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_riskmetrics_required_fields() -> None:
-    # missing maxDrawdown
-    with pytest.raises(ValidationError):
-        RiskMetrics(currentDrawdown=0.05)
-
-    # missing currentDrawdown
-    with pytest.raises(ValidationError):
-        RiskMetrics(maxDrawdown=0.10)
+def test_riskmetrics_zero_arg_construction() -> None:
+    """v0.2.9 stopgap: all fields default to None so RiskMetrics() can
+    be emitted as a no-data stub object on the wire, satisfying the
+    dashboard's Zod object-shape requirement. Real shape per audit
+    row B.5 lands in sub-phase 3e."""
+    rm = RiskMetrics()
+    assert rm.maxDrawdown is None
+    assert rm.currentDrawdown is None
+    assert rm.sharpeRatio is None
+    assert rm.kellyFraction is None
+    assert rm.pairCorrelation is None
+    assert rm.dailyVaR is None
 
 
 def test_riskmetrics_all_optional_none() -> None:
     rm = RiskMetrics(maxDrawdown=0.10, currentDrawdown=0.03)
+    assert rm.maxDrawdown == 0.10
+    assert rm.currentDrawdown == 0.03
     assert rm.sharpeRatio is None
     assert rm.kellyFraction is None
     assert rm.pairCorrelation is None

@@ -28,6 +28,7 @@ from api.auth import verify_bearer
 from api.schemas import (
     DashboardSnapshot,
     GlobalStats,
+    RiskMetrics,
     StopResponse,
     StrategyCardData,
     StrategyConfigPatch,
@@ -102,6 +103,11 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         # internal — only the wire-facing kwargs here changed.
         positions=[],       # OQ-3 stub
         fills=list(snap.recent_fills),
+        # v0.2.9 stopgap: emit a zero-arg RiskMetrics() (all fields None
+        # via Optional defaults) rather than null. Dashboard's Zod schema
+        # requires an object here; null caused silent mock fallback. Real
+        # RiskMetrics shape per audit row B.5 lands in sub-phase 3e.
+        risk=RiskMetrics(),
         equity=[],          # OQ-3 stub
         monthlyPnl=[],      # OQ-3 stub
         backtest=[],        # OQ-3 stub

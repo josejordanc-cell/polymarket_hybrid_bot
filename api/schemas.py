@@ -181,10 +181,17 @@ class FillRecord(BaseModel):
 
 
 class RiskMetrics(BaseModel):
-    """Mirrors RiskMetricsSchema."""
+    """Mirrors RiskMetricsSchema.
 
-    maxDrawdown: float
-    currentDrawdown: float
+    v0.2.9 stopgap: all fields are now Optional with None defaults so
+    that ``RiskMetrics()`` zero-arg construction succeeds. The snapshot
+    emits this default object on the wire (rather than ``null``) to
+    satisfy the dashboard's Zod object-shape requirement; real
+    RiskMetrics shape per audit row B.5 lands in sub-phase 3e.
+    """
+
+    maxDrawdown: Optional[float] = None
+    currentDrawdown: Optional[float] = None
     sharpeRatio: Optional[float] = None
     kellyFraction: Optional[float] = None
     pairCorrelation: Optional[float] = None

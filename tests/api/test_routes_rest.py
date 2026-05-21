@@ -164,7 +164,8 @@ class TestSnapshotHandler:
 
     async def test_snapshot_body_oq3_stubs_empty(self, test_client, bot_config):
         """v0.2.9 audit row A.1: six top-level renames are reflected in the
-        wire payload."""
+        wire payload. The `risk` field emits a zero-arg RiskMetrics() stub
+        (dict, not null) to satisfy dashboard's Zod object-shape requirement."""
         resp = await test_client.get(
             "/dashboard/snapshot", headers=_auth_headers(bot_config)
         )
@@ -176,6 +177,16 @@ class TestSnapshotHandler:
         assert body["backtest"] == []
         assert body["logs"] == []
         assert body["alerts"] == []
+        # risk: zero-arg RiskMetrics() stub — object, not null, all
+        # fields None until B.5 (sub-phase 3e) wires real telemetry.
+        assert body["risk"] is not None
+        assert isinstance(body["risk"], dict)
+        assert body["risk"]["maxDrawdown"] is None
+        assert body["risk"]["currentDrawdown"] is None
+        assert body["risk"]["sharpeRatio"] is None
+        assert body["risk"]["kellyFraction"] is None
+        assert body["risk"]["pairCorrelation"] is None
+        assert body["risk"]["dailyVaR"] is None
         # Old key names must NOT appear in the wire payload.
         for legacy_key in (
             "openPositions",
