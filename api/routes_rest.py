@@ -39,6 +39,52 @@ logger = structlog.get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Wire-shape helpers
+# ---------------------------------------------------------------------------
+
+
+def _collapse_position_id(pos: Any) -> str:
+    """Collapse an internal position into the single ``id`` string the
+    dashboard's wire OpenPosition expects (v0.2.9 audit row B.3 + L2 E.1).
+
+    Two patterns are supported by probing for attributes-or-dict-keys:
+
+    - Polymarket: ``id = f"{marketId}:{outcome}"`` (preferred when the
+      input exposes both fields; matches the bot's internal
+      ``utils.types.Position`` shape which uses snake_case
+      ``market_id``/``outcome`` — both spellings are accepted).
+    - Spot venue: ``id = f"{venue}:{symbol}"`` (e.g.
+      ``"binance:BTC/USDT"``).
+
+    Raises ``ValueError`` if neither pattern matches — surfaces unknown
+    position shapes at the boundary rather than silently corrupting the
+    wire id.
+    """
+    def _get(obj: Any, key: str) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    # Polymarket pattern — accept camelCase (wire) and snake_case (internal).
+    market_id = _get(pos, "marketId") or _get(pos, "market_id")
+    outcome = _get(pos, "outcome")
+    if market_id is not None and outcome is not None:
+        return f"{market_id}:{outcome}"
+
+    # Spot pattern.
+    venue = _get(pos, "venue")
+    symbol = _get(pos, "symbol")
+    if venue is not None and symbol is not None:
+        return f"{venue}:{symbol}"
+
+    raise ValueError(
+        "Cannot collapse position id: input must expose either "
+        "(marketId|market_id + outcome) for Polymarket positions or "
+        "(venue + symbol) for spot positions."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Snapshot serialisation helper
 # ---------------------------------------------------------------------------
 
@@ -101,6 +147,17 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         # v0.2.9 audit row A.1: six top-level renames. BotState snake_case
         # attributes (snap.open_positions, snap.recent_fills, etc.) are
         # internal — only the wire-facing kwargs here changed.
+        #
+        # positions: stays as `[]` OQ-3 stub for now. The wire-shape
+        # OpenPosition (v0.2.9 audit row B.3 + L2 E.1) requires four
+        # fields (currentPrice, unrealizedPnl, unrealizedPnlPct, symbol
+        # as BASE/QUOTE) that the bot's internal utils.types.Position
+        # does not surface today. The collapse helper
+        # _collapse_position_id() above is the boundary's id-rewriting
+        # piece; full internal→wire mapping (synthesising the missing
+        # mark/pnl fields from risk-pricing state) is deferred to the
+        # position-telemetry wiring sub-phase. See OpenPosition
+        # docstring in api/schemas.py for the full wire contract.
         positions=[],       # OQ-3 stub
         fills=list(snap.recent_fills),
         # v0.2.9 stopgap: emit a zero-arg RiskMetrics() (all fields None

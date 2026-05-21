@@ -17,7 +17,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from api.routes_rest import setup_routes
+from api.routes_rest import _collapse_position_id, setup_routes
 from api.schemas import DashboardSnapshot, StopResponse, StrategyRuntimeConfig
 from api.state import BotState
 
@@ -515,3 +515,65 @@ class TestSnapshotDisabledStrategies:
         body = await resp.json()
         cfg_ids = [c["strategyId"] for c in body["strategyConfigs"]]
         assert cfg_ids == ["strategy1", "strategy2", "strategy3"]
+
+
+# ---------------------------------------------------------------------------
+# Test_collapse_position_id — boundary helper (v0.2.9 audit B.3 / L2 E.1)
+# ---------------------------------------------------------------------------
+
+
+class TestCollapsePositionId:
+    """Unit tests for the (marketId, outcome) → single-id collapse rule.
+
+    Accepts both wire-style camelCase (marketId) and internal snake_case
+    (market_id) inputs; covers Polymarket and spot-venue patterns; raises
+    on unknown shapes so wire-id corruption surfaces at the boundary.
+    """
+
+    def test_polymarket_dict_camel_case(self) -> None:
+        assert _collapse_position_id(
+            {"marketId": "abc", "outcome": "yes"}
+        ) == "abc:yes"
+
+    def test_polymarket_dict_snake_case(self) -> None:
+        """utils.types.Position uses snake_case market_id; the helper
+        must accept that form so internal Position objects flow through
+        without renaming at the source."""
+        assert _collapse_position_id(
+            {"market_id": "MKT-001", "outcome": "YES"}
+        ) == "MKT-001:YES"
+
+    def test_spot_dict(self) -> None:
+        assert _collapse_position_id(
+            {"venue": "binance", "symbol": "BTC/USDT"}
+        ) == "binance:BTC/USDT"
+
+    def test_polymarket_object(self) -> None:
+        """Accepts object inputs via getattr (e.g. utils.types.Position)."""
+
+        class P:
+            market_id = "obj-mkt"
+            outcome = "NO"
+
+        assert _collapse_position_id(P()) == "obj-mkt:NO"
+
+    def test_polymarket_takes_precedence_over_spot(self) -> None:
+        """If both patterns' fields are present, Polymarket wins —
+        because that's the bot's primary market type and the internal
+        Position model only has marketId/outcome."""
+        assert _collapse_position_id(
+            {
+                "marketId": "poly-mkt",
+                "outcome": "YES",
+                "venue": "binance",
+                "symbol": "BTC/USDT",
+            }
+        ) == "poly-mkt:YES"
+
+    def test_unknown_shape_raises(self) -> None:
+        """Unknown position shapes must raise rather than silently
+        corrupt the wire id."""
+        with pytest.raises(ValueError):
+            _collapse_position_id({"foo": "bar"})
+        with pytest.raises(ValueError):
+            _collapse_position_id({})

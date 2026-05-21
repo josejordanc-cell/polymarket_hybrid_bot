@@ -121,40 +121,72 @@ def test_strategycarddata_invalid_status() -> None:
 
 
 def test_openposition_round_trip() -> None:
+    """v0.2.9 (audit row B.3 + L2 E.1): nine-field wire shape; single
+    collapsed ``id``; ``symbol`` is BASE/QUOTE; ``side`` is lowercase."""
     pos = OpenPosition(
-        id="pos-001",
-        marketId="MKT-BTC-001",
-        outcome="YES",
-        direction="Long",
+        id="MKT-BTC-001:YES",
+        symbol="BTC/USDT",
+        side="long",
         quantity=50.0,
-        avgPrice=0.55,
+        entryPrice=0.55,
         currentPrice=0.60,
-        unrealisedPnl=2.5,
-        strategy="strategy2",
+        unrealizedPnl=2.5,
+        unrealizedPnlPct=9.09,
         openedAt=1700000000000,
     )
     data = pos.model_dump(mode="json")
     pos2 = OpenPosition.model_validate(data)
-    assert pos2.id == pos.id
-    assert pos2.outcome == pos.outcome
-    assert pos2.direction == pos.direction
-    assert pos2.strategy == pos.strategy
-    assert pos2.quantity == pos.quantity
-    assert pos2.avgPrice == pos.avgPrice
-    assert pos2.openedAt == pos.openedAt
+    assert pos2.id == "MKT-BTC-001:YES"
+    assert pos2.symbol == "BTC/USDT"
+    assert pos2.side == "long"
+    assert pos2.quantity == 50.0
+    assert pos2.entryPrice == 0.55
+    assert pos2.currentPrice == 0.60
+    assert pos2.unrealizedPnl == 2.5
+    assert pos2.unrealizedPnlPct == 9.09
+    assert pos2.openedAt == 1700000000000
+    # Legacy field names removed per audit B.3 / L2 E.1
+    for legacy in ("marketId", "outcome", "direction", "avgPrice",
+                   "unrealisedPnl", "strategy"):
+        assert legacy not in data
 
 
-def test_openposition_invalid_outcome() -> None:
+def test_openposition_invalid_side() -> None:
+    """v0.2.9 (L2 E.1): side enum is lowercase ``long`` / ``short``."""
     with pytest.raises(ValidationError):
         OpenPosition(
             id="pos-bad",
-            marketId="MKT-BTC-001",
-            outcome="MAYBE",
-            direction="Long",
+            symbol="BTC/USDT",
+            side="Long",  # uppercase no longer valid
             quantity=10.0,
-            avgPrice=0.5,
-            strategy="strategy1",
+            entryPrice=0.5,
+            currentPrice=0.5,
+            unrealizedPnl=0.0,
+            unrealizedPnlPct=0.0,
             openedAt=1700000000000,
+        )
+
+
+def test_openposition_rejects_legacy_required_fields() -> None:
+    """v0.2.9 (audit row B.3): the old shape (marketId, outcome,
+    direction, avgPrice, unrealisedPnl, strategy) is no longer
+    accepted. Per pydantic v2's default extras-ignore policy these
+    keys are silently dropped — so construction fails because the new
+    required fields are missing. This documents the practical effect
+    for downstream callers."""
+    with pytest.raises(ValidationError):
+        OpenPosition(
+            id="pos-bad",
+            marketId="MKT-BTC-001",      # old key, ignored
+            outcome="YES",                # old key, ignored
+            direction="Long",             # old key, ignored
+            avgPrice=0.5,                 # old key, ignored
+            unrealisedPnl=0.0,            # old key, ignored
+            strategy="strategy1",         # old key, ignored
+            quantity=10.0,
+            openedAt=1700000000000,
+            # symbol, side, entryPrice, currentPrice, unrealizedPnl,
+            # unrealizedPnlPct all omitted → ValidationError
         )
 
 

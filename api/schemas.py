@@ -126,17 +126,41 @@ class StrategyCardData(BaseModel):
 
 
 class OpenPosition(BaseModel):
-    """Mirrors OpenPositionSchema."""
+    """Mirrors dashboard OpenPositionSchema.
+
+    v0.2.9 (audit row B.3 + L2 decision E.1): the wire shape is nine
+    fields. The bot's internal (marketId, outcome) split — preserved on
+    ``utils.types.Position`` and ``BotState.open_positions`` — is
+    collapsed to a single ``id`` at the wire boundary by
+    ``api/routes_rest.py:_collapse_position_id``:
+
+    - Polymarket positions: ``id = f"{marketId}:{outcome}"`` (e.g.
+      ``"0xabc:YES"``).
+    - Spot venue positions: ``id = f"{venue}:{symbol}"`` (e.g.
+      ``"binance:BTC/USDT"``).
+
+    Wire fields:
+
+    - ``id``        — collapsed identifier (see above).
+    - ``symbol``    — BASE/QUOTE format (e.g. ``"BTC/USDT"``).
+    - ``side``      — ``"long"`` or ``"short"`` (lowercase per
+      dashboard enum).
+    - ``quantity``  — number.
+    - ``entryPrice``       — number.
+    - ``currentPrice``     — number (mark price at snapshot time).
+    - ``unrealizedPnl``    — number, USD.
+    - ``unrealizedPnlPct`` — number, percent (e.g. 1.5 = +1.5%).
+    - ``openedAt`` — epoch ms.
+    """
 
     id: str
-    marketId: str
-    outcome: Literal["YES", "NO"]
-    direction: Literal["Long", "Short"]
+    symbol: str
+    side: Literal["long", "short"]
     quantity: float
-    avgPrice: float
-    currentPrice: Optional[float] = None
-    unrealisedPnl: Optional[float] = None
-    strategy: StrategyId
+    entryPrice: float
+    currentPrice: float
+    unrealizedPnl: float
+    unrealizedPnlPct: float
     openedAt: int  # epoch ms
 
 
