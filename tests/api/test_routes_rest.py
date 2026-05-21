@@ -1142,3 +1142,54 @@ class TestClearPositionsHandler:
     async def test_missing_auth_401(self, test_client):
         resp = await test_client.post("/debug/clear-positions")
         assert resp.status == 401
+
+
+# ---------------------------------------------------------------------------
+# v0.2.9 B.9 — alerts flow into /dashboard/snapshot (integration)
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotAlertsAfterSendAlert:
+    """v0.2.9 B.9 integration. send_alert → BotState.recent_alerts →
+    snapshot body["alerts"]. End-to-end verification that the wiring
+    survives the snapshot serialization path."""
+
+    async def test_alert_appears_in_snapshot_alerts(
+        self, test_client, bot_config, bot_state
+    ) -> None:
+        from api.state import set_state
+        from utils.alerts import send_alert, set_emitter
+
+        # Register the test BotState so send_alert's _broadcast_dashboard
+        # writes into it. Clear the Emitter so we don't need to mock the
+        # WS path for this snapshot-side test.
+        set_state(bot_state)
+        set_emitter(None)
+        try:
+            await send_alert(
+                "smoke alert",
+                level="critical",
+                source="b9-integration-test",
+            )
+
+            resp = await test_client.get(
+                "/dashboard/snapshot", headers=_auth_headers(bot_config)
+            )
+            assert resp.status == 200
+            body = await resp.json()
+            assert len(body["alerts"]) == 1
+            alert = body["alerts"][0]
+            # All 5 canonical AlertItem wire fields present in Zod order.
+            assert list(alert.keys()) == [
+                "id",
+                "time",
+                "severity",
+                "source",
+                "message",
+            ]
+            assert alert["severity"] == "critical"
+            assert alert["source"] == "b9-integration-test"
+            assert alert["message"] == "smoke alert"
+        finally:
+            set_state(None)
+            set_emitter(None)

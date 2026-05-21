@@ -319,16 +319,17 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         # Bot NEVER emits "EXEC"; that vestigial slot is for future
         # B.1-fill-runtime reconsideration.
         logs=[],            # OQ-3 stub — TODO(B.8-wiring)
-        # alerts: stays as `[]` OQ-3 stub. AlertItem schema was already
-        # canonical pre-3f; only the severity-collapse helper changed.
-        # When the alert pipeline lands (B.9-wiring), build each entry as:
-        #   wire_sev = _map_alert_severity(internal_alert.severity.lower())
-        #   if wire_sev is None:   # debug — drop
-        #       continue
-        #   AlertItem(id=..., time=..., severity=wire_sev,
-        #             source=..., message=...)
-        # E.3 collapse: internal error→critical at the boundary.
-        alerts=[],          # OQ-3 stub — TODO(B.9-wiring)
+        # alerts: v0.2.9 B.9 wires this live. Wire-shape AlertItem
+        # instances are appended to BotState.recent_alerts by
+        # utils.alerts._broadcast_dashboard (see send_alert path), so
+        # the snapshot just lists the deque. Mirrors the
+        # fills=list(snap.recent_fills) pattern. The internal-to-wire
+        # severity collapse (E.3) is handled by callers BEFORE the
+        # AlertItem is constructed (or by the implicit Pydantic
+        # Literal constraint at construction time); see
+        # _map_alert_severity in this module for the helper that
+        # callers can use when their source is an internal 5-tier.
+        alerts=list(snap.recent_alerts),
     )
 
 

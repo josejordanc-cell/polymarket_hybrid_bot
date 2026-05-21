@@ -47,6 +47,43 @@ _DEFAULT_STRATEGY_CONFIGS: dict[str, StrategyRuntimeConfig] = {
 
 
 # ---------------------------------------------------------------------------
+# Module-level BotState singleton (v0.2.9 B.9 wiring)
+# ---------------------------------------------------------------------------
+#
+# Registered once at HTTP API server startup via ``set_state``. Modules
+# that need to write into ``BotState.recent_alerts`` / similar collection
+# fields (utils/alerts.py for now; utils/fills.py and others later) call
+# ``get_state()`` and silently no-op if no state is registered. Mirrors
+# the precise pattern of ``utils/alerts.set_emitter`` /
+# ``utils/fills.set_emitter`` — same lifecycle, same idempotence, same
+# test-side ``set_state(None)`` reset.
+#
+# Why this lives here (not in the modules that consume it): keeping the
+# accessor next to ``BotState`` makes the state-singleton lifecycle
+# discoverable from one place, avoids per-module state-pointer drift,
+# and matches the precedent established for the Emitter singleton.
+# ---------------------------------------------------------------------------
+
+_state: "BotState | None" = None
+
+
+def set_state(state: "BotState | None") -> None:
+    """Register (or clear) the process-wide BotState singleton.
+
+    Called from ``api/server.py`` once the HTTP API server initialises
+    the canonical BotState. Idempotent — safe to call multiple times;
+    the most recent value wins. Passing ``None`` clears the
+    registration (used by tests to isolate state between cases)."""
+    global _state
+    _state = state
+
+
+def get_state() -> "BotState | None":
+    """Return the currently registered BotState, or None if unset."""
+    return _state
+
+
+# ---------------------------------------------------------------------------
 # BotState
 # ---------------------------------------------------------------------------
 

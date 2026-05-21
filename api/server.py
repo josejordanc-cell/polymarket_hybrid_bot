@@ -90,6 +90,14 @@ async def run(
     _set_alerts_emitter(emitter)
     _set_fills_emitter(emitter)
 
+    # v0.2.9 B.9 wiring: register the BotState singleton so
+    # utils/alerts._broadcast_dashboard can also append to
+    # state.recent_alerts (snapshot history of alerts). Idempotent;
+    # mirrors the set_emitter lifecycle above. See
+    # .swarm-decisions.md v029-b9-alerts-wiring.
+    from api.state import set_state as _set_bot_state
+    _set_bot_state(state)
+
     app[CONFIG_KEY] = config
     app.router.add_get("/ws", ws_handler)
 

@@ -27,6 +27,9 @@ from typing import TYPE_CHECKING, Literal
 
 import structlog
 
+from api.schemas import AlertItem
+from api.state import get_state
+
 if TYPE_CHECKING:
     from api.emit import Emitter
 
@@ -89,21 +92,53 @@ async def _broadcast_dashboard(
     level: AlertLevel,
     source: str,
 ) -> None:
-    """Broadcast an ALERT WsMessage to dashboard subscribers if an Emitter
-    is registered. Payload shape matches the dashboard's
-    ``AlertItemSchema`` per docs/audit/d24-emit-site-audit.md §10."""
+    """Broadcast an ALERT WsMessage to dashboard subscribers AND append
+    to ``BotState.recent_alerts`` so the snapshot history reflects the
+    alert. Payload shape matches the dashboard's ``AlertItemSchema`` per
+    docs/audit/d24-emit-site-audit.md §10 and v0.2.9 sub-phase 3f
+    (AlertItem 5-field canonical).
+
+    v0.2.9 B.9 wiring: state-side append runs BEFORE the WS broadcast so
+    a reconnecting client doing ``GET /dashboard/snapshot`` sees the
+    alert in ``snap.recent_alerts`` even if the broadcast hasn't reached
+    the WS subscriber yet. Both the state-write and the broadcast
+    silently no-op when their respective singleton is unregistered
+    (headless / unit-test environments). The state-append happens under
+    ``state.write_lock`` for atomicity with concurrent snapshot reads.
+
+    Both write paths are wrapped in a single try/except to preserve the
+    fire-and-forget guarantee of ``send_alert``: an exception in either
+    the state append or the WS broadcast is logged and swallowed, never
+    raised to the caller.
+    """
     em = get_emitter()
-    if em is None:
+    state = get_state()
+    if em is None and state is None:
+        # Nothing to do — both consumers absent.
         return
     try:
-        payload = {
-            "id": uuid.uuid4().hex,
-            "time": _time_mod.strftime("%H:%M:%S", _time_mod.localtime()),
-            "severity": level,
-            "source": source,
-            "message": message,
-        }
-        await em.broadcast({"type": "ALERT", "payload": payload})
+        # Build the AlertItem Pydantic once; it's the single source of
+        # truth for both the state-side append and the wire dict
+        # (broadcasted via .model_dump). Pydantic validation guards
+        # against any future drift from the contract.
+        alert_item = AlertItem(
+            id=uuid.uuid4().hex,
+            time=_time_mod.strftime("%H:%M:%S", _time_mod.localtime()),
+            severity=level,
+            source=source,
+            message=message,
+        )
+
+        # State-write FIRST: snapshot history must reflect the alert
+        # before the broadcast races a reconnect.
+        if state is not None:
+            async with state.write_lock:
+                state.recent_alerts.append(alert_item)
+
+        if em is not None:
+            await em.broadcast(
+                {"type": "ALERT", "payload": alert_item.model_dump(mode="json")}
+            )
     except Exception as exc:
         logger.warning("dashboard_alert_broadcast_failed", error=str(exc))
 
