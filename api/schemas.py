@@ -356,20 +356,24 @@ class DashboardSnapshot(BaseModel):
     # Per-strategy cards
     strategies: Optional[list[StrategyCardData]] = None
 
-    # Positions and fills
-    openPositions: Optional[list[OpenPosition]] = None
-    recentFills: Optional[list[FillRecord]] = None
+    # Positions and fills — v0.2.9 (audit row A.1) renames:
+    #   openPositions → positions, recentFills → fills
+    positions: Optional[list[OpenPosition]] = None
+    fills: Optional[list[FillRecord]] = None
 
     # Strategy configs
     strategyConfigs: Optional[list[StrategyConfig]] = None
 
-    # OQ-3 stub fields — served as empty lists until telemetry is wired (D.2.4+)
-    riskMetrics: Optional[RiskMetrics] = None
-    equityHistory: Optional[list[EquityPoint]] = None       # OQ-3 stub
-    monthlyPnl: Optional[list[MonthlyPnl]] = None          # OQ-3 stub
+    # OQ-3 stub fields — served as empty lists until telemetry is wired (D.2.4+).
+    # v0.2.9 (audit row A.1) renames: riskMetrics → risk, equityHistory → equity,
+    # recentLogs → logs, recentAlerts → alerts. Inner payload shapes unchanged
+    # (those land in sub-phases 3d–3g).
+    risk: Optional[RiskMetrics] = None
+    equity: Optional[list[EquityPoint]] = None              # OQ-3 stub
+    monthlyPnl: Optional[list[MonthlyPnl]] = None           # OQ-3 stub
     backtest: Optional[list[BacktestPoint]] = None          # OQ-3 stub
-    recentLogs: Optional[list[BotLogEntry]] = None          # OQ-3 stub
-    recentAlerts: Optional[list[AlertItem]] = None          # OQ-3 stub
+    logs: Optional[list[BotLogEntry]] = None                # OQ-3 stub
+    alerts: Optional[list[AlertItem]] = None                # OQ-3 stub
 
     # lastUpdatedAt now lives inside globalStats per audit row A.2 — see
     # GlobalStats.lastUpdatedAt and docs/BOT_CONTRACT.md v1.0.

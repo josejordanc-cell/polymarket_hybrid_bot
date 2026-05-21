@@ -97,13 +97,16 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
                 if k in snap.strategy_configs
             )
         ],
-        openPositions=[],   # OQ-3 stub
-        recentFills=list(snap.recent_fills),
-        equityHistory=[],   # OQ-3 stub
+        # v0.2.9 audit row A.1: six top-level renames. BotState snake_case
+        # attributes (snap.open_positions, snap.recent_fills, etc.) are
+        # internal — only the wire-facing kwargs here changed.
+        positions=[],       # OQ-3 stub
+        fills=list(snap.recent_fills),
+        equity=[],          # OQ-3 stub
         monthlyPnl=[],      # OQ-3 stub
         backtest=[],        # OQ-3 stub
-        recentLogs=[],      # OQ-3 stub
-        recentAlerts=[],    # OQ-3 stub
+        logs=[],            # OQ-3 stub
+        alerts=[],          # OQ-3 stub
     )
 
 

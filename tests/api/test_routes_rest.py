@@ -112,8 +112,9 @@ class TestSnapshotHandler:
         assert "totalEquity" not in gs
         assert "dayPnl" not in gs
         assert "dayPnlPct" not in gs
-        # openPositions: int was bot-only per B.1; only the top-level
-        # list[OpenPosition] (an OQ-3 stub) remains on the snapshot.
+        # openPositions: int was bot-only per B.1; the top-level
+        # list[OpenPosition] (an OQ-3 stub) was renamed positions in
+        # v0.2.9 audit row A.1.
         assert "openPositions" not in gs
 
     async def test_snapshot_body_strategies_three_entries(self, test_client, bot_config):
@@ -156,23 +157,38 @@ class TestSnapshotHandler:
         )
         assert resp.status == 200
         body = await resp.json()
-        fills = body["recentFills"]
+        fills = body["fills"]
         assert len(fills) == 2
         fill_ids = {f["id"] for f in fills}
         assert fill_ids == {"fill-001", "fill-002"}
 
     async def test_snapshot_body_oq3_stubs_empty(self, test_client, bot_config):
+        """v0.2.9 audit row A.1: six top-level renames are reflected in the
+        wire payload."""
         resp = await test_client.get(
             "/dashboard/snapshot", headers=_auth_headers(bot_config)
         )
         assert resp.status == 200
         body = await resp.json()
-        assert body["openPositions"] == []
-        assert body["equityHistory"] == []
+        assert body["positions"] == []
+        assert body["equity"] == []
         assert body["monthlyPnl"] == []
         assert body["backtest"] == []
-        assert body["recentLogs"] == []
-        assert body["recentAlerts"] == []
+        assert body["logs"] == []
+        assert body["alerts"] == []
+        # Old key names must NOT appear in the wire payload.
+        for legacy_key in (
+            "openPositions",
+            "recentFills",
+            "riskMetrics",
+            "equityHistory",
+            "recentLogs",
+            "recentAlerts",
+        ):
+            assert legacy_key not in body, (
+                f"v0.2.9 audit row A.1: legacy key {legacy_key!r} must not "
+                f"appear in snapshot wire payload"
+            )
 
 
 # ---------------------------------------------------------------------------

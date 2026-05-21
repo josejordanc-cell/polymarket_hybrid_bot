@@ -374,18 +374,57 @@ def test_strategyconfigpatch_all_none() -> None:
 
 
 def test_dashboardsnapshot_all_optional() -> None:
+    """v0.2.9 audit row A.1: six top-level keys were renamed
+    (openPositions→positions, recentFills→fills, riskMetrics→risk,
+    equityHistory→equity, recentLogs→logs, recentAlerts→alerts)."""
     snap = DashboardSnapshot()
     assert snap.globalStats is None
     assert snap.strategies is None
-    assert snap.openPositions is None
-    assert snap.recentFills is None
+    assert snap.positions is None
+    assert snap.fills is None
     assert snap.strategyConfigs is None
-    assert snap.riskMetrics is None
-    assert snap.equityHistory is None
+    assert snap.risk is None
+    assert snap.equity is None
     assert snap.monthlyPnl is None
     assert snap.backtest is None
-    assert snap.recentLogs is None
-    assert snap.recentAlerts is None
+    assert snap.logs is None
+    assert snap.alerts is None
+
+
+def test_dashboardsnapshot_top_level_keys_match_contract() -> None:
+    """v0.2.9 audit row A.1: the six new wire-key names must exist on the
+    model, and none of the six legacy names must remain as either an
+    attribute or a dumped-payload key."""
+    snap = DashboardSnapshot()
+    # New keys are present as attributes.
+    for new_key in ("positions", "fills", "risk", "equity", "logs", "alerts"):
+        assert hasattr(snap, new_key), f"missing new key {new_key!r}"
+
+    # Legacy keys are absent as attributes.
+    for legacy_key in (
+        "openPositions",
+        "recentFills",
+        "riskMetrics",
+        "equityHistory",
+        "recentLogs",
+        "recentAlerts",
+    ):
+        assert not hasattr(snap, legacy_key), (
+            f"legacy key {legacy_key!r} must not exist on DashboardSnapshot"
+        )
+
+    # Legacy keys are absent from the dumped payload too (belt-and-braces;
+    # pydantic v2 default extras-ignore would silently drop them).
+    data = snap.model_dump(mode="json")
+    for legacy_key in (
+        "openPositions",
+        "recentFills",
+        "riskMetrics",
+        "equityHistory",
+        "recentLogs",
+        "recentAlerts",
+    ):
+        assert legacy_key not in data
 
 
 def test_dashboardsnapshot_no_top_level_lastUpdatedAt() -> None:
@@ -439,7 +478,7 @@ def test_dashboardsnapshot_full_round_trip() -> None:
     )
     snap = DashboardSnapshot(
         globalStats=gs,
-        recentFills=[fill],
+        fills=[fill],
     )
     data = snap.model_dump(mode="json")
     # lastUpdatedAt must live inside globalStats, not at the snapshot root.
@@ -449,8 +488,8 @@ def test_dashboardsnapshot_full_round_trip() -> None:
     assert snap2.globalStats is not None
     assert snap2.globalStats.lastUpdatedAt == 1700001000000
     assert snap2.globalStats.portfolioValue == 15000.0
-    assert snap2.recentFills is not None
-    assert len(snap2.recentFills) == 1
+    assert snap2.fills is not None
+    assert len(snap2.fills) == 1
 
 
 # ---------------------------------------------------------------------------
