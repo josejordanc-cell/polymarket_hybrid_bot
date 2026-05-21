@@ -267,16 +267,16 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         # fields land with B.5 full wiring (equity-history + mark-
         # pricing pipelines).
         risk=RiskMetrics(),
-        # equity: stays as `[]` OQ-3 stub. v0.2.9 3f established the
-        # canonical 3-field EquityPoint shape (day, equity, pnl). When
-        # the equity-history pipeline lands (B.7-wiring), build each
-        # point inline here as:
-        #   EquityPoint(day=pt.date.isoformat(),  # "YYYY-MM-DD"
-        #               equity=pt.equity,
-        #               pnl=pt.pnl)
-        # No internal source today — BotState.equity_history is also a
-        # stub `[]`. See EquityPoint docstring in api/schemas.py.
-        equity=[],          # OQ-3 stub — TODO(B.7-wiring)
+        # equity: v0.2.9 B.7 wires this live. Wire-shape EquityPoint
+        # instances are appended to BotState.equity_history by
+        # utils.equity_curve.equity_snapshot_loop — a long-lived
+        # background task started in api/server.py that bootstraps
+        # today's point on bot start and polls hourly for UTC-day
+        # rollovers (one point per UTC calendar day, capped at
+        # maxlen=200 ~ 6.5 months of daily-close history). Snapshot
+        # just lists the deque; mirrors the fills= / alerts= / logs=
+        # patterns.
+        equity=list(snap.equity_history),
         monthlyPnl=[],      # OQ-3 stub
         backtest=[],        # OQ-3 stub
         # logs: v0.2.9 B.8 wires this live. Wire-shape BotLogEntry

@@ -1564,3 +1564,71 @@ class TestInjectLogHandler:
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 400
+
+
+# ---------------------------------------------------------------------------
+# v0.2.9 B.7 — equity flow into /dashboard/snapshot (integration)
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotEquityHistory:
+    """v0.2.9 B.7 integration. EquityPoints written to
+    BotState.equity_history (production: by
+    utils.equity_curve.equity_snapshot_loop; test: by direct
+    fixture-side manipulation) flow through the snapshot to
+    body["equity"]. End-to-end verification that the snapshot path is
+    actually live (no longer the OQ-3 stub)."""
+
+    async def test_equity_history_appears_in_snapshot(
+        self, test_client, bot_config, bot_state
+    ) -> None:
+        # Inject directly into the fixture's BotState. The production
+        # path uses the equity_snapshot_loop background task; this test
+        # focuses on the snapshot serialization, not the loop's wiring
+        # (which is covered in tests/utils/test_equity_curve.py).
+        from api.schemas import EquityPoint
+
+        bot_state.equity_history.append(
+            EquityPoint(day="2026-05-19", equity=9500.0, pnl=-500.0)
+        )
+        bot_state.equity_history.append(
+            EquityPoint(day="2026-05-20", equity=10000.0, pnl=0.0)
+        )
+        bot_state.equity_history.append(
+            EquityPoint(day="2026-05-21", equity=10250.0, pnl=250.0)
+        )
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+
+        assert len(body["equity"]) == 3
+        # Canonical 3-field shape per 3f (day, equity, pnl in Zod order).
+        for point in body["equity"]:
+            assert list(point.keys()) == ["day", "equity", "pnl"]
+
+        # First → middle → last preserves deque insertion order.
+        assert body["equity"][0]["day"] == "2026-05-19"
+        assert body["equity"][0]["equity"] == 9500.0
+        assert body["equity"][0]["pnl"] == -500.0
+        assert body["equity"][2]["day"] == "2026-05-21"
+        assert body["equity"][2]["equity"] == 10250.0
+        assert body["equity"][2]["pnl"] == 250.0
+
+    async def test_empty_equity_history_serializes_as_empty_array(
+        self, test_client, bot_config, bot_state
+    ) -> None:
+        """Pre-bootstrap (or fresh BotState in tests): equity_history
+        is empty → body["equity"] is []. Must serialize cleanly, not
+        as null."""
+        assert len(bot_state.equity_history) == 0
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["equity"] == []
+        assert isinstance(body["equity"], list)

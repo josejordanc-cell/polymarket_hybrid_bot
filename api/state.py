@@ -18,7 +18,8 @@ Key invariants:
     releases the lock BEFORE serialising. (Minimises lock hold time.)
   - ws_subscribers is NOT copied by shallow_copy() — it is the live list.
   - recent_fills is a deque(maxlen=200); recent_logs maxlen=500;
-    recent_alerts maxlen=200. Bounded in-process storage.
+    recent_alerts maxlen=200; equity_history maxlen=200 (v0.2.9 B.7).
+    Bounded in-process storage.
   - from_risk() uses getattr with safe fallbacks so MagicMock passes (§6).
   - No imports from main.py, risk_manager.py, or strategies/ in this file.
 """
@@ -146,7 +147,9 @@ class BotState:
     # OQ-3 stub fields — empty until D.2.4 wires telemetry
     # ------------------------------------------------------------------
     risk_metrics: Any = None                              # OQ-3
-    equity_history: list = field(default_factory=list)   # OQ-3
+    equity_history: deque = field(                       # B.7, maxlen=200
+        default_factory=lambda: deque(maxlen=200)
+    )
     monthly_pnl: list = field(default_factory=list)      # OQ-3
     backtest: list = field(default_factory=list)          # OQ-3
     recent_logs: deque = field(                           # OQ-3, maxlen=500
@@ -326,7 +329,9 @@ class BotState:
             kill_switch_requested=self.kill_switch_requested,
             last_updated_at_ms=self.last_updated_at_ms,
             risk_metrics=self.risk_metrics,
-            equity_history=list(self.equity_history),
+            equity_history=deque(
+                self.equity_history, maxlen=self.equity_history.maxlen
+            ),
             monthly_pnl=list(self.monthly_pnl),
             backtest=list(self.backtest),
             recent_logs=deque(self.recent_logs, maxlen=self.recent_logs.maxlen),

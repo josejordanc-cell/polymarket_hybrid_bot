@@ -98,6 +98,19 @@ async def run(
     from api.state import set_state as _set_bot_state
     _set_bot_state(state)
 
+    # v0.2.9 B.7 wiring: start the equity-snapshot background loop.
+    # Bootstraps today's EquityPoint immediately on first iteration so
+    # the snapshot's equity[] slice is non-empty from boot+1s; then
+    # polls hourly for UTC-day rollovers to append the next day's
+    # point. Lifecycle: created here, cancelled in the finally block
+    # below so shutdown is clean (no orphaned tasks). See
+    # .swarm-decisions.md v029-b7-equity-wiring.
+    from utils.equity_curve import equity_snapshot_loop
+    equity_task: asyncio.Task = asyncio.create_task(
+        equity_snapshot_loop(state),
+        name="equity_snapshot_loop",
+    )
+
     app[CONFIG_KEY] = config
     app.router.add_get("/ws", ws_handler)
 
@@ -119,5 +132,20 @@ async def run(
         logger.critical("api_server_fatal_error", exc_info=True)
         raise
     finally:
+        # v0.2.9 B.7: cancel + await the equity-snapshot loop BEFORE
+        # tearing down the runner so the loop sees CancelledError
+        # cleanly. The loop propagates the cancellation and logs an
+        # info event on exit. The await here swallows CancelledError
+        # (expected) but re-raises any other exception (unexpected).
+        equity_task.cancel()
+        try:
+            await equity_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "equity_snapshot_loop_shutdown_error", exc_info=True
+            )
+
         await runner.cleanup()
         logger.info("api_server_stopped")
