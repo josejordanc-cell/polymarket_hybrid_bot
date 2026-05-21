@@ -217,16 +217,36 @@ class TestSnapshotHandler:
         assert body["backtest"] == []
         assert body["logs"] == []
         assert body["alerts"] == []
-        # risk: zero-arg RiskMetrics() stub — object, not null, all
-        # fields None until B.5 (sub-phase 3e) wires real telemetry.
+        # risk: zero-arg RiskMetrics() stub — canonical 6-field shape
+        # per v0.2.9 3e (components/dashboard/schemas.ts:96 +
+        # BOT_CONTRACT.md v1.0 line 119). leverage=1.0 (spot-venue
+        # structural constant); other 5 fields None until B.5 full
+        # wiring lands.
         assert body["risk"] is not None
         assert isinstance(body["risk"], dict)
+        assert list(body["risk"].keys()) == [
+            "maxDrawdown",
+            "sharpe",
+            "var95",
+            "leverage",
+            "exposurePct",
+            "liquidationRisk",
+        ]
+        assert body["risk"]["leverage"] == 1.0
         assert body["risk"]["maxDrawdown"] is None
-        assert body["risk"]["currentDrawdown"] is None
-        assert body["risk"]["sharpeRatio"] is None
-        assert body["risk"]["kellyFraction"] is None
-        assert body["risk"]["pairCorrelation"] is None
-        assert body["risk"]["dailyVaR"] is None
+        assert body["risk"]["sharpe"] is None
+        assert body["risk"]["var95"] is None
+        assert body["risk"]["exposurePct"] is None
+        assert body["risk"]["liquidationRisk"] is None
+        # Legacy 5bc2b6b stub field names must NOT appear in the wire payload.
+        for legacy_risk_key in (
+            "currentDrawdown",
+            "sharpeRatio",
+            "kellyFraction",
+            "pairCorrelation",
+            "dailyVaR",
+        ):
+            assert legacy_risk_key not in body["risk"]
         # Old key names must NOT appear in the wire payload.
         for legacy_key in (
             "openPositions",

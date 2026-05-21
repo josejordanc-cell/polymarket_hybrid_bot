@@ -191,10 +191,13 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         # production loop body lands with B.1 fill runtime.
         positions=[],       # OQ-3 stub
         fills=list(snap.recent_fills),
-        # v0.2.9 stopgap: emit a zero-arg RiskMetrics() (all fields None
-        # via Optional defaults) rather than null. Dashboard's Zod schema
-        # requires an object here; null caused silent mock fallback. Real
-        # RiskMetrics shape per audit row B.5 lands in sub-phase 3e.
+        # v0.2.9 3e: emit a zero-arg RiskMetrics() — canonical 6-field
+        # shape per components/dashboard/schemas.ts:96 + BOT_CONTRACT.md
+        # v1.0 line 119. Five fields default to None (Zod nullable);
+        # leverage defaults to 1.0 (spot-venue structural constant —
+        # see RiskMetrics docstring). Real values for the five nullable
+        # fields land with B.5 full wiring (equity-history + mark-
+        # pricing pipelines).
         risk=RiskMetrics(),
         equity=[],          # OQ-3 stub
         monthlyPnl=[],      # OQ-3 stub

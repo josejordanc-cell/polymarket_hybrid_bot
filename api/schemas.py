@@ -219,21 +219,44 @@ class FillRecord(BaseModel):
 
 
 class RiskMetrics(BaseModel):
-    """Mirrors RiskMetricsSchema.
+    """Mirrors dashboard RiskMetricsSchema — canonical Zod source at
+    ``components/dashboard/schemas.ts:96`` + ``BOT_CONTRACT.md`` v1.0
+    line 119. Six fields, in wire order.
 
-    v0.2.9 stopgap: all fields are now Optional with None defaults so
-    that ``RiskMetrics()`` zero-arg construction succeeds. The snapshot
-    emits this default object on the wire (rather than ``null``) to
-    satisfy the dashboard's Zod object-shape requirement; real
-    RiskMetrics shape per audit row B.5 lands in sub-phase 3e.
+    v0.2.9 sub-phase 3e correction: the 5bc2b6b risk-stub commit
+    shipped the v0.2.8 legacy field set (currentDrawdown, sharpeRatio,
+    kellyFraction, pairCorrelation, dailyVaR), which never matched
+    the contract. Audit row B.5 incorrectly described a 10-field
+    shape; Team A's A-2 reconciliation matrix established the
+    canonical 6-field set above (Zod + BOT_CONTRACT.md agree).
+
+    Wire fields (Zod field order):
+
+    - ``maxDrawdown``     — number | null. Observed peak-to-trough
+      drawdown, percent. TODO(B.5-wiring): compute from equity_history
+      pipeline when full wiring lands.
+    - ``sharpe``          — number | null. Sharpe ratio. TODO(B.5-
+      wiring): compute from returns sample when sufficient samples
+      exist.
+    - ``var95``           — number | null. 95% Value-at-Risk, USD.
+      TODO(B.5-wiring): compute from returns distribution.
+    - ``leverage``        — number, hardcoded ``1.0``. Polymarket
+      binary spot is structurally non-leveraged — full notional paid
+      up-front, no margin. Documentary constant; if a leveraged venue
+      is ever added, this is the single source of truth to change.
+    - ``exposurePct``     — number | null. Net exposure as percent of
+      portfolio. TODO(B.5-wiring): needs per-position mark surface.
+    - ``liquidationRisk`` — Literal["low","medium","high"] | null.
+      Enum, NOT a number. TODO(B.5-wiring): derive from drawdown
+      proximity to ``cfg.risk.daily_drawdown_limit_pct``.
     """
 
     maxDrawdown: Optional[float] = None
-    currentDrawdown: Optional[float] = None
-    sharpeRatio: Optional[float] = None
-    kellyFraction: Optional[float] = None
-    pairCorrelation: Optional[float] = None
-    dailyVaR: Optional[float] = None
+    sharpe: Optional[float] = None
+    var95: Optional[float] = None
+    leverage: float = 1.0
+    exposurePct: Optional[float] = None
+    liquidationRisk: Optional[Literal["low", "medium", "high"]] = None
 
 
 # ---------------------------------------------------------------------------

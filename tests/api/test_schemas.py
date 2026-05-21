@@ -260,28 +260,125 @@ def test_fillrecord_optional_fields_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_riskmetrics_zero_arg_construction() -> None:
-    """v0.2.9 stopgap: all fields default to None so RiskMetrics() can
-    be emitted as a no-data stub object on the wire, satisfying the
-    dashboard's Zod object-shape requirement. Real shape per audit
-    row B.5 lands in sub-phase 3e."""
+def test_riskmetrics_default_shape() -> None:
+    """v0.2.9 3e: canonical 6-field Zod shape per
+    components/dashboard/schemas.ts:96 + BOT_CONTRACT.md v1.0 line 119.
+    Zero-arg construction yields the wire-default object: leverage=1.0
+    (spot-venue structural constant), other five fields = None."""
     rm = RiskMetrics()
-    assert rm.maxDrawdown is None
-    assert rm.currentDrawdown is None
-    assert rm.sharpeRatio is None
-    assert rm.kellyFraction is None
-    assert rm.pairCorrelation is None
-    assert rm.dailyVaR is None
+    data = rm.model_dump(mode="json")
+
+    # Exact 6 keys in Zod order.
+    expected_keys = [
+        "maxDrawdown",
+        "sharpe",
+        "var95",
+        "leverage",
+        "exposurePct",
+        "liquidationRisk",
+    ]
+    assert list(data.keys()) == expected_keys
+
+    # leverage is a structural constant; everything else is null by default.
+    assert data["leverage"] == 1.0
+    assert isinstance(data["leverage"], float)
+    assert data["maxDrawdown"] is None
+    assert data["sharpe"] is None
+    assert data["var95"] is None
+    assert data["exposurePct"] is None
+    assert data["liquidationRisk"] is None
 
 
-def test_riskmetrics_all_optional_none() -> None:
-    rm = RiskMetrics(maxDrawdown=0.10, currentDrawdown=0.03)
-    assert rm.maxDrawdown == 0.10
-    assert rm.currentDrawdown == 0.03
-    assert rm.sharpeRatio is None
-    assert rm.kellyFraction is None
-    assert rm.pairCorrelation is None
-    assert rm.dailyVaR is None
+def test_riskmetrics_leverage_overridable_but_constant_in_production() -> None:
+    """v0.2.9 3e: leverage is a regular Pydantic field with a default of
+    1.0, not a frozen attribute. The override path exists for completeness
+    (tests, future leveraged-venue addition), but production callers must
+    rely on the default — Polymarket binary spot is structurally
+    non-leveraged. This test documents the override capability and the
+    production invariant in one place."""
+    rm = RiskMetrics(leverage=2.5)
+    assert rm.leverage == 2.5  # override works
+    # Documentary assertion: zero-arg construction (production path)
+    # always yields leverage=1.0.
+    assert RiskMetrics().leverage == 1.0
+
+
+def test_riskmetrics_liquidationrisk_enum() -> None:
+    """v0.2.9 3e: liquidationRisk is an enum (Literal["low","medium",
+    "high"]), NOT a number. Matches Zod's z.enum([...]).nullable()."""
+    for valid in ("low", "medium", "high"):
+        rm = RiskMetrics(liquidationRisk=valid)
+        assert rm.liquidationRisk == valid
+
+    # Null is the default and also explicitly accepted.
+    assert RiskMetrics(liquidationRisk=None).liquidationRisk is None
+
+    # Invalid values must be rejected.
+    with pytest.raises(ValidationError):
+        RiskMetrics(liquidationRisk="invalid")  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        RiskMetrics(liquidationRisk="LOW")  # type: ignore[arg-type]  # case-sensitive
+    with pytest.raises(ValidationError):
+        RiskMetrics(liquidationRisk=0.5)  # type: ignore[arg-type]  # wrong type
+
+
+def test_riskmetrics_rejects_legacy_fields() -> None:
+    """v0.2.9 3e: the v0.2.8 legacy field set (currentDrawdown,
+    sharpeRatio, kellyFraction, pairCorrelation, dailyVaR) is no longer
+    part of the model. Per pydantic v2 default extras-ignore policy
+    these kwargs are silently dropped — construction still succeeds,
+    but the legacy keys must NOT appear in the dumped payload."""
+    rm = RiskMetrics(
+        # Legacy keys from the 5bc2b6b risk-stub — silently dropped.
+        currentDrawdown=0.03,
+        sharpeRatio=1.5,
+        kellyFraction=0.25,
+        pairCorrelation=0.5,
+        dailyVaR=100.0,
+    )
+    data = rm.model_dump()
+    for legacy in (
+        "currentDrawdown",
+        "sharpeRatio",
+        "kellyFraction",
+        "pairCorrelation",
+        "dailyVaR",
+    ):
+        assert legacy not in data
+        assert not hasattr(rm, legacy)
+
+    # The 6 canonical fields are still present in the dump.
+    for canonical in (
+        "maxDrawdown",
+        "sharpe",
+        "var95",
+        "leverage",
+        "exposurePct",
+        "liquidationRisk",
+    ):
+        assert canonical in data
+
+
+def test_riskmetrics_round_trip_with_real_values() -> None:
+    """v0.2.9 3e: round-trip a fully populated RiskMetrics (anticipates
+    B.5 full-wiring producing real values for the five nullable
+    fields)."""
+    rm = RiskMetrics(
+        maxDrawdown=5.2,
+        sharpe=1.4,
+        var95=180.0,
+        leverage=1.0,
+        exposurePct=12.5,
+        liquidationRisk="medium",
+    )
+    data = rm.model_dump(mode="json")
+    rm2 = RiskMetrics.model_validate(data)
+    assert rm2.maxDrawdown == 5.2
+    assert rm2.sharpe == 1.4
+    assert rm2.var95 == 180.0
+    assert rm2.leverage == 1.0
+    assert rm2.exposurePct == 12.5
+    assert rm2.liquidationRisk == "medium"
 
 
 # ---------------------------------------------------------------------------
