@@ -233,62 +233,138 @@ def test_riskmetrics_all_optional_none() -> None:
 
 def test_strategyconfig_valid() -> None:
     cfg = StrategyConfig(
-        id="strategy1",
+        strategyId="strategy1",
         enabled=True,
         maxPositionSize=100.0,
-        riskBudget=0.33,
+        riskPct=2.5,
     )
-    assert cfg.id == "strategy1"
+    assert cfg.strategyId == "strategy1"
     assert cfg.enabled is True
+    assert cfg.riskPct == 2.5
 
 
-def test_strategyconfig_maxpositionsize_zero() -> None:
+def test_strategyconfig_maxpositionsize_below_min() -> None:
+    """v0.2.9 (L2 E.2): maxPositionSize range 0.1–100.0."""
     with pytest.raises(ValidationError):
         StrategyConfig(
-            id="strategy1",
+            strategyId="strategy1",
             enabled=True,
             maxPositionSize=0.0,
-            riskBudget=0.33,
+            riskPct=2.5,
         )
 
 
-def test_strategyconfig_riskbudget_out_of_range() -> None:
+def test_strategyconfig_maxpositionsize_above_max() -> None:
+    """v0.2.9 (L2 E.2): maxPositionSize must not exceed 100.0."""
     with pytest.raises(ValidationError):
         StrategyConfig(
-            id="strategy1",
+            strategyId="strategy1",
+            enabled=True,
+            maxPositionSize=150.0,
+            riskPct=2.5,
+        )
+
+
+def test_strategyconfig_riskpct_in_range() -> None:
+    """v0.2.9 (L2 E.2): riskPct 2.5 (= 2.5%) is the new sensible default."""
+    cfg = StrategyConfig(
+        strategyId="strategy1",
+        enabled=True,
+        maxPositionSize=100.0,
+        riskPct=2.5,
+    )
+    assert cfg.riskPct == 2.5
+
+
+def test_strategyconfig_riskpct_rejects_below_0_1() -> None:
+    """v0.2.9 (L2 E.2): riskPct lower bound 0.1 (= 0.1%)."""
+    with pytest.raises(ValidationError):
+        StrategyConfig(
+            strategyId="strategy1",
             enabled=True,
             maxPositionSize=100.0,
-            riskBudget=1.5,
+            riskPct=0.05,
         )
 
 
-def test_strategyconfig_activepairs_valid() -> None:
-    cfg = StrategyConfig(
-        id="strategy2",
-        enabled=True,
-        maxPositionSize=50.0,
-        riskBudget=0.25,
-        activePairs="BTC-USD,ETH-USD",
-    )
-    assert cfg.activePairs == "BTC-USD,ETH-USD"
-
-
-def test_strategyconfig_activepairs_invalid() -> None:
+def test_strategyconfig_riskpct_rejects_above_10() -> None:
+    """v0.2.9 (L2 E.2): riskPct upper bound 10.0 (= 10%)."""
     with pytest.raises(ValidationError):
         StrategyConfig(
-            id="strategy2",
+            strategyId="strategy1",
+            enabled=True,
+            maxPositionSize=100.0,
+            riskPct=10.5,
+        )
+
+
+def test_strategyconfig_activepairs_array_format() -> None:
+    """v0.2.9 (L2 E.2): activePairs is a list of BASE/QUOTE strings.
+    The old CSV string form ('BTC/USDT,ETH/USDT') must NOT be accepted."""
+    cfg = StrategyConfig(
+        strategyId="strategy2",
+        enabled=True,
+        maxPositionSize=50.0,
+        riskPct=2.5,
+        activePairs=["BTC/USDT", "ETH/USDT"],
+    )
+    assert cfg.activePairs == ["BTC/USDT", "ETH/USDT"]
+
+    # Old CSV form must be rejected — pydantic v2 does not coerce
+    # 'BTC/USDT,ETH/USDT' into a list, and per-element regex would fail
+    # even if it did.
+    with pytest.raises(ValidationError):
+        StrategyConfig(
+            strategyId="strategy2",
             enabled=True,
             maxPositionSize=50.0,
-            riskBudget=0.25,
-            activePairs="btc-usd",
+            riskPct=2.5,
+            activePairs="BTC/USDT,ETH/USDT",  # type: ignore[arg-type]
+        )
+
+
+def test_strategyconfig_activepairs_regex_rejects_invalid() -> None:
+    """v0.2.9 (L2 E.2): each element must match BASE/QUOTE."""
+    with pytest.raises(ValidationError):
+        StrategyConfig(
+            strategyId="strategy2",
+            enabled=True,
+            maxPositionSize=50.0,
+            riskPct=2.5,
+            activePairs=["btcusdt"],
+        )
+
+    with pytest.raises(ValidationError):
+        StrategyConfig(
+            strategyId="strategy2",
+            enabled=True,
+            maxPositionSize=50.0,
+            riskPct=2.5,
+            activePairs=["BTC-USDT"],  # hyphen instead of slash
+        )
+
+
+def test_strategyconfig_rejects_id_keyword() -> None:
+    """v0.2.9 (L2 E.2): 'id' is no longer a field on StrategyConfig.
+    Per pydantic v2 default (extra='ignore'), passing id=... is silently
+    dropped — so construction fails because the new required field
+    strategyId is missing. This documents the practical effect of the
+    rename for downstream callers."""
+    with pytest.raises(ValidationError):
+        StrategyConfig(
+            id="strategy1",           # old key — silently dropped
+            enabled=True,
+            maxPositionSize=100.0,
+            riskPct=2.5,
+            # strategyId omitted → ValidationError
         )
 
 
 def test_strategyconfigpatch_all_none() -> None:
-    patch = StrategyConfigPatch(id="strategy1")
+    patch = StrategyConfigPatch(strategyId="strategy1")
     assert patch.enabled is None
     assert patch.maxPositionSize is None
-    assert patch.riskBudget is None
+    assert patch.riskPct is None
     assert patch.activePairs is None
 
 
@@ -383,36 +459,43 @@ def test_dashboardsnapshot_full_round_trip() -> None:
 
 
 def test_strategyruntimeconfig_defaults() -> None:
-    cfg = StrategyRuntimeConfig(id="strategy1")
+    """v0.2.9 (L2 E.2): default riskPct=2.5 (= 2.5%) replaces the prior
+    riskBudget=0.33 — see commit message for the 33%→2.5% rationale."""
+    cfg = StrategyRuntimeConfig(strategyId="strategy1")
     assert cfg.enabled is True
     assert cfg.maxPositionSize == 100.0
-    assert cfg.riskBudget == 0.33
+    assert cfg.riskPct == 2.5
     assert cfg.activePairs is None
 
 
 def test_strategyruntimeconfig_apply_patch() -> None:
-    base = StrategyRuntimeConfig(id="strategy1")
-    patch = StrategyConfigPatch(id="strategy1", enabled=False, maxPositionSize=75.0)
+    base = StrategyRuntimeConfig(strategyId="strategy1")
+    patch = StrategyConfigPatch(
+        strategyId="strategy1", enabled=False, maxPositionSize=75.0
+    )
     updated = base.apply_patch(patch)
     assert updated.enabled is False
     assert updated.maxPositionSize == 75.0
-    assert updated.riskBudget == 0.33  # unchanged
+    assert updated.riskPct == 2.5  # default unchanged
+    # strategyId is excluded from the patch payload — it identifies the
+    # target config, not a mutation.
+    assert updated.strategyId == "strategy1"
 
 
 def test_strategyruntimeconfig_to_contract() -> None:
     cfg = StrategyRuntimeConfig(
-        id="strategy2",
+        strategyId="strategy2",
         enabled=True,
         maxPositionSize=50.0,
-        riskBudget=0.25,
-        activePairs="BTC-USD",
+        riskPct=1.5,
+        activePairs=["BTC/USDT"],
     )
     contract = cfg.to_contract()
     assert isinstance(contract, StrategyConfig)
-    assert contract.id == cfg.id
+    assert contract.strategyId == cfg.strategyId
     assert contract.enabled == cfg.enabled
     assert contract.maxPositionSize == cfg.maxPositionSize
-    assert contract.riskBudget == cfg.riskBudget
+    assert contract.riskPct == cfg.riskPct
     assert contract.activePairs == cfg.activePairs
 
 

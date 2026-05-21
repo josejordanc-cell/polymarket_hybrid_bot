@@ -133,6 +133,7 @@ class TestSnapshotHandler:
             assert s["status"] == "live"
 
     async def test_snapshot_body_strategy_configs_present(self, test_client, bot_config):
+        """v0.2.9 (L2 E.2): strategyId, riskPct (percent), maxPositionSize."""
         resp = await test_client.get(
             "/dashboard/snapshot", headers=_auth_headers(bot_config)
         )
@@ -140,9 +141,14 @@ class TestSnapshotHandler:
         body = await resp.json()
         configs = body["strategyConfigs"]
         assert len(configs) == 3
+        ids = {cfg["strategyId"] for cfg in configs}
+        assert ids == {"strategy1", "strategy2", "strategy3"}
         for cfg in configs:
             assert cfg["maxPositionSize"] == 100.0
-            assert cfg["riskBudget"] == 0.33
+            assert cfg["riskPct"] == 2.5
+            # Removed/renamed fields must not appear
+            assert "id" not in cfg
+            assert "riskBudget" not in cfg
 
     async def test_snapshot_body_recent_fills_two_entries(self, test_client, bot_config):
         resp = await test_client.get(
@@ -180,7 +186,7 @@ class TestStrategiesConfigHandler:
     async def test_config_auth_success(self, test_client, bot_config):
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy1", "enabled": False},
+            json={"strategyId": "strategy1", "enabled": False},
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 200
@@ -190,14 +196,14 @@ class TestStrategiesConfigHandler:
     async def test_config_missing_auth(self, test_client):
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy1", "enabled": False},
+            json={"strategyId": "strategy1", "enabled": False},
         )
         assert resp.status == 401
 
     async def test_config_wrong_token(self, test_client):
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy1", "enabled": False},
+            json={"strategyId": "strategy1", "enabled": False},
             headers={"Authorization": "Bearer wrong-token-xyz"},
         )
         assert resp.status == 401
@@ -231,7 +237,7 @@ class TestStrategiesConfigHandler:
     async def test_config_invalid_id(self, test_client, bot_config):
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy99", "enabled": False},
+            json={"strategyId": "strategy99", "enabled": False},
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 422
@@ -239,23 +245,26 @@ class TestStrategiesConfigHandler:
     async def test_config_invalid_max_position(self, test_client, bot_config):
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy1", "maxPositionSize": 0.0},
+            json={"strategyId": "strategy1", "maxPositionSize": 0.0},
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 422
 
-    async def test_config_invalid_risk_budget(self, test_client, bot_config):
+    async def test_config_invalid_risk_pct(self, test_client, bot_config):
+        """v0.2.9 (L2 E.2): riskPct out-of-range (>10) must 422."""
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy1", "riskBudget": 1.5},
+            json={"strategyId": "strategy1", "riskPct": 10.5},
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 422
 
     async def test_config_invalid_active_pairs(self, test_client, bot_config):
+        """v0.2.9 (L2 E.2): activePairs is a list of BASE/QUOTE strings.
+        Lowercase or non-slash-separated elements must 422."""
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy1", "activePairs": "btc-usd"},
+            json={"strategyId": "strategy1", "activePairs": ["btc-usd"]},
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 422
@@ -264,7 +273,11 @@ class TestStrategiesConfigHandler:
         # POST the patch
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy1", "enabled": False, "maxPositionSize": 75.0},
+            json={
+                "strategyId": "strategy1",
+                "enabled": False,
+                "maxPositionSize": 75.0,
+            },
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 200
@@ -275,7 +288,7 @@ class TestStrategiesConfigHandler:
         )
         assert snap_resp.status == 200
         snap_body = await snap_resp.json()
-        configs = {c["id"]: c for c in snap_body["strategyConfigs"]}
+        configs = {c["strategyId"]: c for c in snap_body["strategyConfigs"]}
         assert configs["strategy1"]["enabled"] is False
         assert configs["strategy1"]["maxPositionSize"] == 75.0
 
@@ -285,7 +298,7 @@ class TestStrategiesConfigHandler:
         # Only patch enabled; other fields must remain at defaults
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy1", "enabled": False},
+            json={"strategyId": "strategy1", "enabled": False},
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 200
@@ -295,10 +308,10 @@ class TestStrategiesConfigHandler:
         )
         assert snap_resp.status == 200
         snap_body = await snap_resp.json()
-        configs = {c["id"]: c for c in snap_body["strategyConfigs"]}
+        configs = {c["strategyId"]: c for c in snap_body["strategyConfigs"]}
         s1 = configs["strategy1"]
         assert s1["enabled"] is False
-        assert s1["riskBudget"] == 0.33
+        assert s1["riskPct"] == 2.5
         assert s1["maxPositionSize"] == 100.0
 
     async def test_config_sibling_strategies_untouched(
@@ -307,7 +320,7 @@ class TestStrategiesConfigHandler:
         # Patch strategy2 only; strategy1 and strategy3 must stay at defaults
         resp = await test_client.post(
             "/api/strategies/config",
-            json={"id": "strategy2", "enabled": False},
+            json={"strategyId": "strategy2", "enabled": False},
             headers=_auth_headers(bot_config),
         )
         assert resp.status == 200
@@ -317,13 +330,13 @@ class TestStrategiesConfigHandler:
         )
         assert snap_resp.status == 200
         snap_body = await snap_resp.json()
-        configs = {c["id"]: c for c in snap_body["strategyConfigs"]}
+        configs = {c["strategyId"]: c for c in snap_body["strategyConfigs"]}
         assert configs["strategy1"]["enabled"] is True
         assert configs["strategy1"]["maxPositionSize"] == 100.0
-        assert configs["strategy1"]["riskBudget"] == 0.33
+        assert configs["strategy1"]["riskPct"] == 2.5
         assert configs["strategy3"]["enabled"] is True
         assert configs["strategy3"]["maxPositionSize"] == 100.0
-        assert configs["strategy3"]["riskBudget"] == 0.33
+        assert configs["strategy3"]["riskPct"] == 2.5
 
 
 # ---------------------------------------------------------------------------
@@ -409,10 +422,10 @@ async def test_client_disabled_strategies(bot_config):
     """TestClient with strategy2 and strategy3 disabled in BotState."""
     state = BotState.create(equity=10000.0, day_start_equity=9500.0)
     state.strategy_configs["strategy2"] = StrategyRuntimeConfig(
-        id="strategy2", enabled=False
+        strategyId="strategy2", enabled=False
     )
     state.strategy_configs["strategy3"] = StrategyRuntimeConfig(
-        id="strategy3", enabled=False
+        strategyId="strategy3", enabled=False
     )
     app = web.Application()
     setup_routes(app, state, bot_config)
@@ -473,5 +486,5 @@ class TestSnapshotDisabledStrategies:
         )
         assert resp.status == 200
         body = await resp.json()
-        cfg_ids = [c["id"] for c in body["strategyConfigs"]]
+        cfg_ids = [c["strategyId"] for c in body["strategyConfigs"]]
         assert cfg_ids == ["strategy1", "strategy2", "strategy3"]

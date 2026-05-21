@@ -71,14 +71,17 @@ def _build_snapshot(snap: BotState) -> DashboardSnapshot:
         ),
         strategies=[
             StrategyCardData(
-                id=cfg.id,
-                name=strategy_name_map[cfg.id],
+                id=cfg.strategyId,
+                name=strategy_name_map[cfg.strategyId],
                 status="live" if cfg.enabled else "paused",
                 # Telemetry fields default to None / [] until OQ-3 wiring
                 # tracks per-strategy pnl, trades, hold time, signal,
                 # exposure, and sparkline. See StrategyCardData docstring
                 # and d24-emit-site-audit.md §10 (STRATEGY_UPDATE drift).
-                pipelineStep=pipeline_step_map[cfg.id],
+                # StrategyCardData.id stays "id" per audit row B.2 (ALIGNED);
+                # only StrategyConfig/Patch/RuntimeConfig get the
+                # id→strategyId rename per audit row B.6 + L2 E.2.
+                pipelineStep=pipeline_step_map[cfg.strategyId],
             )
             for cfg in (
                 snap.strategy_configs[k]
@@ -133,7 +136,7 @@ async def strategies_config_handler(request: web.Request, state: BotState, confi
         return web.Response(status=422, text=str(exc))
     async with state.write_lock:
         state.apply_strategy_patch(patch)
-    logger.info("strategy_config_patched", strategy_id=patch.id)
+    logger.info("strategy_config_patched", strategy_id=patch.strategyId)
     return web.json_response({"ok": True})
 
 

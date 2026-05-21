@@ -125,7 +125,7 @@ def test_shallow_copy_collection_isolation() -> None:
 
     # Mutate original's strategy_configs — copy must be unaffected
     original.strategy_configs["strategy1"] = StrategyRuntimeConfig(
-        id="strategy1", enabled=False
+        strategyId="strategy1", enabled=False
     )
     assert copy.strategy_configs["strategy1"].enabled is True
 
@@ -135,7 +135,7 @@ def test_shallow_copy_collection_isolation() -> None:
 
     # Mutate copy's strategy_configs — original must be unaffected
     copy.strategy_configs["strategy2"] = StrategyRuntimeConfig(
-        id="strategy2", maxPositionSize=50.0
+        strategyId="strategy2", maxPositionSize=50.0
     )
     assert original.strategy_configs["strategy2"].maxPositionSize == 100.0
 
@@ -163,20 +163,22 @@ def test_shallow_copy_new_lock_and_preserved_maxlen() -> None:
 
 def test_apply_strategy_patch_fields_applied_defaults_preserved() -> None:
     state = BotState.create(equity=0.0, day_start_equity=0.0)
-    patch = StrategyConfigPatch(id="strategy1", enabled=False, maxPositionSize=75.0)
+    patch = StrategyConfigPatch(
+        strategyId="strategy1", enabled=False, maxPositionSize=75.0
+    )
     state.apply_strategy_patch(patch)
 
     cfg = state.strategy_configs["strategy1"]
     assert cfg.enabled is False
     assert cfg.maxPositionSize == 75.0
-    assert cfg.riskBudget == 0.33      # default preserved
+    assert cfg.riskPct == 2.5          # v0.2.9 default preserved
     assert cfg.activePairs is None     # default preserved
 
 
 def test_apply_strategy_patch_returns_new_instance() -> None:
     state = BotState.create(equity=0.0, day_start_equity=0.0)
     original_cfg = state.strategy_configs["strategy1"]
-    patch = StrategyConfigPatch(id="strategy1", enabled=False)
+    patch = StrategyConfigPatch(strategyId="strategy1", enabled=False)
     state.apply_strategy_patch(patch)
 
     assert state.strategy_configs["strategy1"] is not original_cfg
@@ -184,7 +186,9 @@ def test_apply_strategy_patch_returns_new_instance() -> None:
 
 def test_apply_strategy_patch_sibling_strategies_untouched() -> None:
     state = BotState.create(equity=0.0, day_start_equity=0.0)
-    patch = StrategyConfigPatch(id="strategy2", enabled=False, maxPositionSize=50.0)
+    patch = StrategyConfigPatch(
+        strategyId="strategy2", enabled=False, maxPositionSize=50.0
+    )
     state.apply_strategy_patch(patch)
 
     # strategy1 and strategy3 must be at defaults
@@ -203,7 +207,7 @@ def test_get_strategy_config_valid_id() -> None:
     state = BotState.create(equity=0.0, day_start_equity=0.0)
     cfg = state.get_strategy_config("strategy1")
     assert isinstance(cfg, StrategyRuntimeConfig)
-    assert cfg.id == "strategy1"
+    assert cfg.strategyId == "strategy1"
 
 
 def test_get_strategy_config_invalid_id_raises_key_error() -> None:

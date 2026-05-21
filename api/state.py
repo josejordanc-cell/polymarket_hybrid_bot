@@ -40,9 +40,9 @@ from api.schemas import (
 # ---------------------------------------------------------------------------
 
 _DEFAULT_STRATEGY_CONFIGS: dict[str, StrategyRuntimeConfig] = {
-    "strategy1": StrategyRuntimeConfig(id="strategy1", enabled=True),
-    "strategy2": StrategyRuntimeConfig(id="strategy2", enabled=True),
-    "strategy3": StrategyRuntimeConfig(id="strategy3", enabled=True),
+    "strategy1": StrategyRuntimeConfig(strategyId="strategy1", enabled=True),
+    "strategy2": StrategyRuntimeConfig(strategyId="strategy2", enabled=True),
+    "strategy3": StrategyRuntimeConfig(strategyId="strategy3", enabled=True),
 }
 
 
@@ -239,13 +239,15 @@ class BotState:
             open_positions=raw_positions,
             recent_fills=deque(maxlen=200),
             strategy_configs={
-                "strategy1": StrategyRuntimeConfig(id="strategy1", enabled=True),
+                "strategy1": StrategyRuntimeConfig(
+                    strategyId="strategy1", enabled=True
+                ),
                 "strategy2": StrategyRuntimeConfig(
-                    id="strategy2",
+                    strategyId="strategy2",
                     enabled=momentum_enabled,
                 ),
                 "strategy3": StrategyRuntimeConfig(
-                    id="strategy3",
+                    strategyId="strategy3",
                     enabled=market_maker_enabled,
                 ),
             },
@@ -330,5 +332,5 @@ class BotState:
         pipeline (v0.2.9). See docs/audit/d24-emit-site-audit.md §6.0
         (three strategy surfaces) and §10 (correction block).
         """
-        current = self.strategy_configs[patch.id]
-        self.strategy_configs[patch.id] = current.apply_patch(patch)
+        current = self.strategy_configs[patch.strategyId]
+        self.strategy_configs[patch.strategyId] = current.apply_patch(patch)

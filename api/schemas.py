@@ -195,51 +195,65 @@ class RiskMetrics(BaseModel):
 # StrategyConfig  (full config shape returned by snapshot + GET endpoints)
 # ---------------------------------------------------------------------------
 
-_ACTIVE_PAIRS_RE = re.compile(r"^[A-Z0-9/-]+(,[A-Z0-9/-]+)*$")
+# v0.2.9 (L2 E.2): per-element BASE/QUOTE pair regex matches the dashboard's
+# STRATEGY_ACTIVE_PAIR_REGEX in components/dashboard/schemas.ts. Two to six
+# uppercase letters per side, single forward slash separator.
+_BASE_QUOTE_RE = re.compile(r"^[A-Z]{2,6}/[A-Z]{2,6}$")
+
+
+def _validate_active_pairs_list(
+    v: Optional[list[str]],
+) -> Optional[list[str]]:
+    """Per-element BASE/QUOTE validator shared by the three strategy
+    config models. None is accepted; an empty list is accepted; any
+    non-conforming element raises ValueError."""
+    if v is None:
+        return v
+    for pair in v:
+        if not _BASE_QUOTE_RE.match(pair):
+            raise ValueError(
+                "activePairs entries must match BASE/QUOTE (e.g. 'BTC/USDT'); "
+                f"got {pair!r}"
+            )
+    return v
 
 
 class StrategyConfig(BaseModel):
-    """Mirrors StrategyConfigSchema.  Returned as part of the snapshot."""
+    """Mirrors dashboard StrategyConfigSchema. Returned as part of the
+    snapshot. v0.2.9 (L2 E.2): riskPct is the contract form (0.1–10.0
+    percent points), id → strategyId, activePairs is a list of
+    BASE/QUOTE strings."""
 
-    id: StrategyId
+    strategyId: StrategyId
     enabled: bool
-    maxPositionSize: float = Field(gt=0)
-    riskBudget: float = Field(ge=0.0, le=1.0)
-    activePairs: Optional[str] = None  # comma-separated market-id list
+    maxPositionSize: float = Field(ge=0.1, le=100.0)
+    riskPct: float = Field(ge=0.1, le=10.0)
+    activePairs: Optional[list[str]] = None
 
     @field_validator("activePairs")
     @classmethod
-    def _validate_active_pairs(cls, v: Optional[str]) -> Optional[str]:
-        if v is None or v == "":
-            return v
-        if not _ACTIVE_PAIRS_RE.match(v):
-            raise ValueError(
-                "activePairs must be a comma-separated list of "
-                "uppercase alphanumeric market identifiers, e.g. 'BTC-USD,ETH-USD'"
-            )
-        return v
+    def _validate_active_pairs(
+        cls, v: Optional[list[str]]
+    ) -> Optional[list[str]]:
+        return _validate_active_pairs_list(v)
 
 
 class StrategyConfigPatch(BaseModel):
-    """Request body for POST /api/strategies/config.  Mirrors strategyPatchBodySchema."""
+    """Request body for POST /api/strategies/config. Mirrors
+    strategyPatchBodySchema. v0.2.9 (L2 E.2) renames match StrategyConfig."""
 
-    id: StrategyId
+    strategyId: StrategyId
     enabled: Optional[bool] = None
-    maxPositionSize: Optional[float] = Field(default=None, gt=0)
-    riskBudget: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    activePairs: Optional[str] = None
+    maxPositionSize: Optional[float] = Field(default=None, ge=0.1, le=100.0)
+    riskPct: Optional[float] = Field(default=None, ge=0.1, le=10.0)
+    activePairs: Optional[list[str]] = None
 
     @field_validator("activePairs")
     @classmethod
-    def _validate_active_pairs(cls, v: Optional[str]) -> Optional[str]:
-        if v is None or v == "":
-            return v
-        if not _ACTIVE_PAIRS_RE.match(v):
-            raise ValueError(
-                "activePairs must be a comma-separated list of "
-                "uppercase alphanumeric market identifiers"
-            )
-        return v
+    def _validate_active_pairs(
+        cls, v: Optional[list[str]]
+    ) -> Optional[list[str]]:
+        return _validate_active_pairs_list(v)
 
 
 # ---------------------------------------------------------------------------
@@ -383,40 +397,43 @@ class StrategyRuntimeConfig(BaseModel):
     Mutable per-strategy config stored in BotState.strategy_configs.
     Named per spec (D.2.1 §OQ-5). enabled defaults True so the bot runs
     all three strategies on startup unless explicitly disabled.
+
+    v0.2.9 (L2 E.2): renames match the wire StrategyConfig. The default
+    riskPct=2.5 (2.5% per trade) replaces the prior riskBudget=0.33 —
+    the 0.33 fraction was outside the contract's 0.1–10.0 percent range
+    and was an unintentionally aggressive 33% sizing default.
     """
 
-    id: StrategyId
+    strategyId: StrategyId
     enabled: bool = True
-    maxPositionSize: float = Field(default=100.0, gt=0)
-    riskBudget: float = Field(default=0.33, ge=0.0, le=1.0)
-    activePairs: Optional[str] = None
+    maxPositionSize: float = Field(default=100.0, ge=0.1, le=100.0)
+    riskPct: float = Field(default=2.5, ge=0.1, le=10.0)
+    activePairs: Optional[list[str]] = None
 
     @field_validator("activePairs")
     @classmethod
-    def _validate_active_pairs(cls, v: Optional[str]) -> Optional[str]:
-        if v is None or v == "":
-            return v
-        if not _ACTIVE_PAIRS_RE.match(v):
-            raise ValueError(
-                "activePairs must be a comma-separated list of "
-                "uppercase alphanumeric market identifiers"
-            )
-        return v
+    def _validate_active_pairs(
+        cls, v: Optional[list[str]]
+    ) -> Optional[list[str]]:
+        return _validate_active_pairs_list(v)
 
     def apply_patch(self, patch: StrategyConfigPatch) -> "StrategyRuntimeConfig":
-        """Return a new StrategyRuntimeConfig with patch fields applied."""
+        """Return a new StrategyRuntimeConfig with patch fields applied.
+
+        strategyId is excluded from the patch payload — it identifies the
+        target config, not a mutation."""
         data = self.model_dump()
-        patch_data = patch.model_dump(exclude_none=True, exclude={"id"})
+        patch_data = patch.model_dump(exclude_none=True, exclude={"strategyId"})
         data.update(patch_data)
         return StrategyRuntimeConfig(**data)
 
     def to_contract(self) -> StrategyConfig:
         """Convert to the contract-facing StrategyConfig shape."""
         return StrategyConfig(
-            id=self.id,
+            strategyId=self.strategyId,
             enabled=self.enabled,
             maxPositionSize=self.maxPositionSize,
-            riskBudget=self.riskBudget,
+            riskPct=self.riskPct,
             activePairs=self.activePairs,
         )
 
