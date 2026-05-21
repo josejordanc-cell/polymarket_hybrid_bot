@@ -1792,3 +1792,67 @@ class TestSnapshotRiskMetricsAfterB1Wiring:
         assert resp.status == 200
         body = await resp.json()
         assert body["risk"]["liquidationRisk"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# v0.2.9 v029-monthly-pnl-wiring — monthlyPnl flows through snapshot
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotMonthlyPnlAfterWiring:
+    """End-to-end: utils.equity_curve.compute_monthly_pnl runs at
+    snapshot-build time, grouping BotState.equity_history by month
+    prefix and emitting wire MonthlyPnl rows. Verify shape (2 fields
+    only — no `trades`), order (ascending), and PnL semantics
+    (last - first per month)."""
+
+    async def test_two_months_two_rows_ascending(
+        self, test_client, bot_config, bot_state
+    ) -> None:
+        from api.schemas import EquityPoint
+
+        # 5 points spanning April + May 2026 (per coordinator scope).
+        # April: 3 points → qualifies. May: 2 points → qualifies.
+        bot_state.equity_history.append(EquityPoint(day="2026-04-01", equity=9500.0, pnl=0.0))
+        bot_state.equity_history.append(EquityPoint(day="2026-04-15", equity=9800.0, pnl=0.0))
+        bot_state.equity_history.append(EquityPoint(day="2026-04-30", equity=10100.0, pnl=0.0))
+        bot_state.equity_history.append(EquityPoint(day="2026-05-01", equity=10100.0, pnl=0.0))
+        bot_state.equity_history.append(EquityPoint(day="2026-05-20", equity=10500.0, pnl=0.0))
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+
+        # Two rows, ascending by month string.
+        assert len(body["monthlyPnl"]) == 2
+        assert body["monthlyPnl"][0]["month"] == "2026-04"
+        assert body["monthlyPnl"][1]["month"] == "2026-05"
+
+        # PnL = last - first within each month.
+        # April: 10100 - 9500 = 600
+        assert body["monthlyPnl"][0]["pnl"] == pytest.approx(600.0)
+        # May: 10500 - 10100 = 400
+        assert body["monthlyPnl"][1]["pnl"] == pytest.approx(400.0)
+
+        # Wire shape: exactly 2 keys per row, ZERO `trades` field.
+        for row in body["monthlyPnl"]:
+            assert list(row.keys()) == ["month", "pnl"]
+            assert "trades" not in row
+
+    async def test_empty_equity_history_serializes_empty_list(
+        self, test_client, bot_config, bot_state
+    ) -> None:
+        """Pre-bootstrap or fresh BotState: equity_history empty →
+        body["monthlyPnl"] = []. Mirrors the analogous empty-equity_history
+        assertion for the equity slice."""
+        assert len(bot_state.equity_history) == 0
+
+        resp = await test_client.get(
+            "/dashboard/snapshot", headers=_auth_headers(bot_config)
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["monthlyPnl"] == []
+        assert isinstance(body["monthlyPnl"], list)

@@ -461,11 +461,30 @@ class EquityPoint(BaseModel):
 
 
 class MonthlyPnl(BaseModel):
-    """Mirrors MonthlyPnlSchema."""
+    """Mirrors dashboard MonthlyPnlSchema — canonical Zod source at
+    ``components/dashboard/schemas.ts:95`` + ``BOT_CONTRACT.md`` v1.0
+    line 603. Two fields, both required, in wire order.
 
-    month: str  # ISO-8601 year-month, e.g. "2026-05"
+    v0.2.9 sub-phase v029-monthly-pnl-wiring (forward-only): the
+    prior bot Pydantic carried a third ``trades: int`` field that
+    Zod canonical does not have. Pydantic v2 dump used to ship it;
+    Zod silently stripped it on parse (no-op for that key). The
+    schema is now reconciled to the 2-field canonical shape per the
+    "Zod is canonical, bot moves" precedent established by 3a-3i.
+
+    Wire fields (Zod order):
+
+    - ``month`` — calendar-month string. Bot convention: ``"YYYY-MM"``
+      (ISO 8601 year-month) mirroring ``EquityPoint.day``'s
+      ``"YYYY-MM-DD"`` precedent. Zod accepts any string; bot picks
+      the consistent format.
+    - ``pnl``   — number, USD. Per the v029-monthly-pnl-wiring lock:
+      ``last_equity_in_month - first_equity_in_month`` from the
+      bot's ``BotState.equity_history`` deque grouped by month.
+    """
+
+    month: str  # bot convention: "YYYY-MM" ISO 8601 year-month
     pnl: float
-    trades: int
 
 
 # ---------------------------------------------------------------------------

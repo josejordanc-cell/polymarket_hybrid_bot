@@ -47,11 +47,12 @@ here; no risk_manager unfreeze needed).
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from itertools import groupby
+from typing import TYPE_CHECKING, List, Sequence
 
 import structlog
 
-from api.schemas import EquityPoint
+from api.schemas import EquityPoint, MonthlyPnl
 from utils.types import utc_now
 
 if TYPE_CHECKING:
@@ -161,3 +162,64 @@ async def equity_snapshot_loop(
                 "equity_snapshot_loop_iteration_error",
                 error=str(exc),
             )
+
+
+# ---------------------------------------------------------------------------
+# Monthly-PnL aggregation (v0.2.9 v029-monthly-pnl-wiring)
+# ---------------------------------------------------------------------------
+
+
+def compute_monthly_pnl(
+    equity_history: Sequence[EquityPoint],
+) -> List[MonthlyPnl]:
+    """Aggregate ``equity_history`` into per-month PnL rows.
+
+    Groups EquityPoint instances by their ``day`` field's month prefix
+    (``"YYYY-MM"`` from the ``"YYYY-MM-DD"`` calendar-date convention).
+    For each month with **≥2 points** (lock 6), emits a ``MonthlyPnl``
+    with PnL computed as ``last_equity_in_month - first_equity_in_month``
+    (lock 5). Months with fewer than 2 points are silently dropped
+    (insufficient data — a single point gives an uninformative
+    zero-PnL row). Output is sorted ascending by month string
+    (lock 3) — matches ``equity_history`` natural iteration order.
+
+    Pure function; no I/O; no logging. Defensive on empty input
+    (returns ``[]``). Computation cost: O(n) over the deque,
+    negligible at n ≤ 200. Mirrors B.1 / B.7 helper-in-utils pattern.
+
+    Coordinator-locked decisions (v029-monthly-pnl-wiring):
+      1. ``trades`` field removed from ``MonthlyPnl`` (forward-only
+         schema reconcile against Zod canonical). Helper signature
+         doesn't include it.
+      2. month format: ``"YYYY-MM"``.
+      3. sort order: ascending.
+      4. helper home: this module (``utils/equity_curve.py``).
+      5. PnL semantic: ``last_equity_in_month - first_equity_in_month``.
+      6. minimum samples per month: ≥2 (dropped otherwise).
+      7. history depth: no explicit cap — whatever ``equity_history``
+         naturally yields (~6.5 months at deque ``maxlen=200``).
+    """
+    if not equity_history:
+        return []
+
+    # Group by month-prefix of each EquityPoint.day ("YYYY-MM-DD" → "YYYY-MM").
+    # equity_history is already in chronological order (deque insertion order
+    # from equity_snapshot_loop), so groupby groups contiguous same-month runs.
+    rows: List[MonthlyPnl] = []
+    for month, group in groupby(equity_history, key=lambda pt: pt.day[:7]):
+        points = list(group)
+        if len(points) < 2:
+            # Lock 6: <2 points in this month → drop (uninformative).
+            continue
+        # Lock 5: last - first equity within the month.
+        rows.append(
+            MonthlyPnl(
+                month=month,
+                pnl=points[-1].equity - points[0].equity,
+            )
+        )
+    # Lock 3: ascending sort. equity_history's natural order is already
+    # chronological, but a defensive sort here makes the helper robust
+    # against any future caller that passes an unsorted sequence.
+    rows.sort(key=lambda r: r.month)
+    return rows

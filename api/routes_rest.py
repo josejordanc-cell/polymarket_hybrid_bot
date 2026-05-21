@@ -39,6 +39,7 @@ from api.schemas import (
     StrategyId,
 )
 from api.state import BotState
+from utils.equity_curve import compute_monthly_pnl
 from utils.types import Position
 
 logger = structlog.get_logger(__name__)
@@ -331,7 +332,12 @@ def _build_snapshot(snap: BotState, config: Any) -> DashboardSnapshot:
         # just lists the deque; mirrors the fills= / alerts= / logs=
         # patterns.
         equity=list(snap.equity_history),
-        monthlyPnl=[],      # OQ-3 stub
+        # v0.2.9 v029-monthly-pnl-wiring: aggregate equity_history into
+        # per-month PnL rows. Helper groups by "YYYY-MM" month prefix,
+        # emits one MonthlyPnl per month with ≥2 points, sorted ascending.
+        # Lazy snapshot-build-time computation (PATH A) — mirrors B.1's
+        # _build_riskmetrics pattern. Returns [] for empty equity_history.
+        monthlyPnl=compute_monthly_pnl(snap.equity_history),
         backtest=[],        # OQ-3 stub
         # logs: v0.2.9 B.8 wires this live. Wire-shape BotLogEntry
         # instances are appended to BotState.recent_logs by

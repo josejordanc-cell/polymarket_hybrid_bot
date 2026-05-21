@@ -263,3 +263,117 @@ class TestEquityHistoryBounded:
         assert copy.equity_history.maxlen == 200
         # Copy is independent from the original.
         assert copy.equity_history is not state.equity_history
+
+
+# ---------------------------------------------------------------------------
+# TestComputeMonthlyPnl — v029-monthly-pnl-wiring (7 coordinator locks)
+# ---------------------------------------------------------------------------
+
+
+from api.schemas import MonthlyPnl
+from utils.equity_curve import compute_monthly_pnl
+
+
+class TestComputeMonthlyPnl:
+    """Aggregate equity_history into per-month PnL rows.
+
+    All 7 coordinator-locked decisions exercised here:
+      1. trades field removed → MonthlyPnl dump has 2 keys only.
+      2. month format: "YYYY-MM".
+      3. sort order: ascending.
+      4. helper home: utils/equity_curve.py.
+      5. PnL semantic: last_equity_in_month - first_equity_in_month.
+      6. minimum samples per month: ≥2 (drop otherwise).
+      7. history depth: emit whatever equity_history yields.
+    """
+
+    def test_empty_history_returns_empty_list(self) -> None:
+        """Defensive: zero points → empty list, not None, not raise."""
+        assert compute_monthly_pnl([]) == []
+
+    def test_single_month_one_point_dropped(self) -> None:
+        """Lock 6: <2 points in a month → drop the month entirely."""
+        history = [EquityPoint(day="2026-05-21", equity=10000.0, pnl=0.0)]
+        assert compute_monthly_pnl(history) == []
+
+    def test_single_month_two_points_one_row(self) -> None:
+        """Lock 5: PnL = last - first equity within the month."""
+        history = [
+            EquityPoint(day="2026-05-19", equity=10000.0, pnl=0.0),
+            EquityPoint(day="2026-05-21", equity=10500.0, pnl=500.0),
+        ]
+        rows = compute_monthly_pnl(history)
+        assert len(rows) == 1
+        assert rows[0].month == "2026-05"
+        assert rows[0].pnl == 500.0
+
+    def test_multi_month_all_qualifying_ascending_order(self) -> None:
+        """Lock 3: ascending sort. Lock 5: per-month last - first."""
+        history = [
+            # March: 2 points → qualifies
+            EquityPoint(day="2026-03-01", equity=9000.0, pnl=0.0),
+            EquityPoint(day="2026-03-15", equity=9500.0, pnl=0.0),
+            # April: 3 points → qualifies
+            EquityPoint(day="2026-04-01", equity=9500.0, pnl=0.0),
+            EquityPoint(day="2026-04-15", equity=10000.0, pnl=0.0),
+            EquityPoint(day="2026-04-30", equity=10250.0, pnl=0.0),
+            # May: 2 points → qualifies
+            EquityPoint(day="2026-05-01", equity=10250.0, pnl=0.0),
+            EquityPoint(day="2026-05-20", equity=10800.0, pnl=0.0),
+        ]
+        rows = compute_monthly_pnl(history)
+        assert [r.month for r in rows] == ["2026-03", "2026-04", "2026-05"]
+        # March: 9500 - 9000 = 500
+        assert rows[0].pnl == pytest.approx(500.0)
+        # April: 10250 - 9500 = 750
+        assert rows[1].pnl == pytest.approx(750.0)
+        # May: 10800 - 10250 = 550
+        assert rows[2].pnl == pytest.approx(550.0)
+
+    def test_mixed_qualifying_and_singleton_months(self) -> None:
+        """Months with 1 point are dropped (lock 6); qualifying months
+        appear in the output. Tests the per-month independence of the
+        filter — a singleton month doesn't affect adjacent months."""
+        history = [
+            # Feb: 1 point only → dropped
+            EquityPoint(day="2026-02-15", equity=8500.0, pnl=0.0),
+            # March: 2 points → qualifies
+            EquityPoint(day="2026-03-01", equity=8500.0, pnl=0.0),
+            EquityPoint(day="2026-03-30", equity=9200.0, pnl=0.0),
+            # April: 1 point only → dropped
+            EquityPoint(day="2026-04-15", equity=9300.0, pnl=0.0),
+            # May: 2 points → qualifies
+            EquityPoint(day="2026-05-01", equity=9300.0, pnl=0.0),
+            EquityPoint(day="2026-05-20", equity=9100.0, pnl=0.0),
+        ]
+        rows = compute_monthly_pnl(history)
+        assert [r.month for r in rows] == ["2026-03", "2026-05"]
+        assert rows[0].pnl == pytest.approx(700.0)   # 9200 - 8500
+        assert rows[1].pnl == pytest.approx(-200.0)  # 9100 - 9300 (loss)
+
+    def test_negative_pnl_loss_month(self) -> None:
+        """Lock 5: pnl can be negative (loss month). Sign convention
+        is signed PnL — NOT positive-magnitude drawdown (lock 1 on
+        maxDrawdown was different).
+        """
+        history = [
+            EquityPoint(day="2026-05-01", equity=10000.0, pnl=0.0),
+            EquityPoint(day="2026-05-30", equity=9200.0, pnl=0.0),
+        ]
+        rows = compute_monthly_pnl(history)
+        assert len(rows) == 1
+        assert rows[0].pnl == pytest.approx(-800.0)
+
+    def test_wire_dump_has_exactly_two_keys(self) -> None:
+        """Lock 1: trades field removed. Pydantic dump must have
+        exactly {month, pnl} — no trades, no other extras. Regression
+        guard against any future drift back to the 3-field shape."""
+        history = [
+            EquityPoint(day="2026-05-01", equity=10000.0, pnl=0.0),
+            EquityPoint(day="2026-05-15", equity=10500.0, pnl=0.0),
+        ]
+        rows = compute_monthly_pnl(history)
+        assert len(rows) == 1
+        data = rows[0].model_dump(mode="json")
+        assert list(data.keys()) == ["month", "pnl"]
+        assert "trades" not in data
