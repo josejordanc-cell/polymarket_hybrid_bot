@@ -1,4 +1,4 @@
-# Polymarket Hybrid Bot — Handoff (v2.1 pre-dashboard)
+# Polymarket Hybrid Bot — Handoff (v0.2.9 dashboard-integrated)
 
 Standalone onboarding document for developers and the dashboard team. No prior prompt history required.
 
@@ -6,7 +6,7 @@ Standalone onboarding document for developers and the dashboard team. No prior p
 
 ## 1. Executive summary
 
-The **Polymarket Hybrid Bot** is an async Python **3.11** service that trades Polymarket binary markets using a **strict strategy priority loop**: intra-market arbitrage first, then spot-lag momentum, then market making, with optional smart-money copy. It supports **simulation** (`PaperSimulator`) and **live** execution (`py-clob-client`), with **REST-based settlement polling**, **live fill reconciliation**, **arb partial-fill unwind**, **Prometheus `/metrics`**, **hourly on-chain USDC vs equity reconciliation**, and **JSON-log-driven weekly reports**. The codebase is **pre-dashboard**: observability contracts (logs + metrics) are stable; the next step is a 48–72h sim validation on the DigitalOcean droplet, then dashboard wiring and a cautious live flip with small risk caps.
+The **Polymarket Hybrid Bot** is an async Python **3.11** service that trades Polymarket binary markets using a **strict strategy priority loop**: intra-market arbitrage first, then spot-lag momentum, then market making, with optional smart-money copy. It supports **simulation** (`PaperSimulator`) and **live** execution (`py-clob-client`), with **REST-based settlement polling**, **live fill reconciliation**, **arb partial-fill unwind**, **Prometheus `/metrics`**, **hourly on-chain USDC vs equity reconciliation**, and **JSON-log-driven weekly reports**. The v0.2.9 wave shipped the **dashboard wire-shape alignment** (canonical Zod source-of-truth) and **snapshot history wiring** for the `positions` / `fills` / `risk` / `equity` / `logs` / `alerts` slices; observability contracts (logs + metrics + HTTP/WS snapshot) are stable. The next step is a 48–72h sim validation on the DigitalOcean droplet, then a cautious live flip with small risk caps.
 
 ---
 
@@ -16,7 +16,7 @@ The **Polymarket Hybrid Bot** is an async Python **3.11** service that trades Po
 |-------|-----------|------|
 | Entry | `main.py` | `run_bot`, feed tasks, resolution + equity loops, strategy priority, execution |
 | Config | `config/settings.py` | `BotConfig` / `get_config()` — all `BOT_*` env vars |
-| Data | `data_feeds/polymarket_feed.py`, `binance_feed.py`, `polygon_feed.py` | WS order book, spot returns, optional Polygon wallet scan |
+| Data | `data_feeds/polymarket_feed.py`, `spot_feed.py`, `polygon_feed.py` | WS order book, spot returns (Binance + Coinbase via ccxt), optional Polygon wallet scan |
 | Risk | `risk_manager.py` | Kelly sizing, fees, kill-switch, approvals, fills, settlement accounting |
 | Execution | `execution/clob_executor.py` | Sim vs live CLOB; pending orders; fill reconciliation |
 | Strategies | `strategies/intra_arbitrage.py`, `momentum_latency.py`, `market_maker.py`, `smart_money_copy.py` | Signals and order construction |
@@ -27,7 +27,7 @@ The **Polymarket Hybrid Bot** is an async Python **3.11** service that trades Po
 | CLI tools | **`utils/wallet_reconcile_cli.py`**, **`scripts/wallet_reconcile.py`**, **`scripts/weekly_report.py`** | Ad-hoc drift check; weekly PnL report from logs |
 | Deploy | `deploy/Dockerfile`, `deploy/docker-compose.yml`, **`deploy/DEPLOY_DO.md`** | Container, port **9091** for metrics |
 
-Background asyncio tasks started from `main.py`: Polymarket WS feed, Binance feed, Polygon feed, **`resolution_polling_loop`**, **`equity_reconciliation_loop`**.
+Background asyncio tasks started from `main.py`: Polymarket WS feed, spot feed (Binance + Coinbase), Polygon feed, **`resolution_polling_loop`**, **`equity_reconciliation_loop`**.
 
 ---
 
@@ -35,7 +35,7 @@ Background asyncio tasks started from `main.py`: Polymarket WS feed, Binance fee
 
 1. **`intra_arbitrage`** — Enters when `YES_ask + NO_ask ≤ 1 - min_arb_edge` and liquidity gates pass. Emits two **IOC BUY** legs (YES + NO) with shared **`bundle_id`**. Live requires both token IDs. Partial fills trigger async **`reconcile_arb_bundle`** (unwind or skip with metrics).
 
-2. **`momentum_latency`** — If no arb, uses Binance log-return z-score vs **`BOT_STRAT_MOMENTUM_Z_THRESHOLD`**; buys YES or NO with IOC. Gated by **`BOT_STRAT_MOMENTUM_ENABLED`**.
+2. **`momentum_latency`** — If no arb, uses spot log-return z-score (Binance / Coinbase via the SpotFeed) vs **`BOT_STRAT_MOMENTUM_Z_THRESHOLD`**; buys YES or NO with IOC. Gated by **`BOT_STRAT_MOMENTUM_ENABLED`**.
 
 3. **`market_maker`** — If no arb/momentum, posts **GTC** bid/ask on YES with **`BOT_STRAT_MM_SPREAD_BPS`** and inventory skew. Notional in the main loop is **`bankroll_usd * 0.01`** (fixed config, not floating equity).
 

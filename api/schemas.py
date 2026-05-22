@@ -551,14 +551,18 @@ class DashboardSnapshot(BaseModel):
     Every field is Optional so the serialiser can emit partial snapshots
     during startup or when sub-systems are unavailable.
 
-    v0.2.9 wired four formerly-OQ-3-stub fields to production sources:
+    v0.2.9 wired five formerly-OQ-3-stub fields to production sources:
     ``risk`` (3e — canonical 6-field RiskMetrics computed in
     ``api/routes_rest.py:_build_riskmetrics``), ``equity`` (B.7 —
     populated by ``utils.equity_curve.equity_snapshot_loop``),
     ``logs`` (B.8 — populated by ``utils.logs.log_to_dashboard``),
-    ``alerts`` (B.9 — populated by ``utils.alerts.send_alert``).
-    ``monthlyPnl`` and ``backtest`` remain OQ-3 stubs pending the
-    telemetry pipeline.
+    ``alerts`` (B.9 — populated by ``utils.alerts.send_alert``), and
+    ``monthlyPnl`` (computed at serialize time by
+    ``utils.equity_curve.compute_monthly_pnl`` over
+    ``BotState.equity_history``). ``backtest`` remains a deliberate
+    permanent stub per ``.swarm-decisions.md`` ``v029-backtest-close``
+    (the BacktestEngine lacks per-strategy equity attribution, which is
+    a feature-build task, not a wiring task).
     """
 
     # Core portfolio
@@ -580,15 +584,18 @@ class DashboardSnapshot(BaseModel):
     # Inner payload shapes locked across 3d–3g.
     #
     # Wiring status (v0.2.9):
-    #   risk      — LIVE (3e: api/routes_rest.py:_build_riskmetrics)
-    #   equity    — LIVE (B.7: utils.equity_curve.equity_snapshot_loop)
-    #   logs      — LIVE (B.8: utils.logs.log_to_dashboard)
-    #   alerts    — LIVE (B.9: utils.alerts.send_alert)
-    #   monthlyPnl, backtest — OQ-3 stubs (telemetry pipeline pending).
+    #   risk       — LIVE (3e: api/routes_rest.py:_build_riskmetrics)
+    #   equity     — LIVE (B.7: utils.equity_curve.equity_snapshot_loop)
+    #   logs       — LIVE (B.8: utils.logs.log_to_dashboard)
+    #   alerts     — LIVE (B.9: utils.alerts.send_alert)
+    #   monthlyPnl — LIVE (utils.equity_curve.compute_monthly_pnl over
+    #                BotState.equity_history at serialize time)
+    #   backtest   — intentional permanent stub per v029-backtest-close
+    #                (BacktestEngine lacks per-strategy equity attribution).
     risk: Optional[RiskMetrics] = None
     equity: Optional[list[EquityPoint]] = None              # B.7 wired
-    monthlyPnl: Optional[list[MonthlyPnl]] = None           # OQ-3 stub
-    backtest: Optional[list[BacktestPoint]] = None          # OQ-3 stub
+    monthlyPnl: Optional[list[MonthlyPnl]] = None           # wired (compute_monthly_pnl)
+    backtest: Optional[list[BacktestPoint]] = None          # permanent stub (v029-backtest-close)
     logs: Optional[list[BotLogEntry]] = None                # B.8 wired
     alerts: Optional[list[AlertItem]] = None                # B.9 wired
 

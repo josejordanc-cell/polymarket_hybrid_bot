@@ -20,7 +20,7 @@ This module adds an HTTP/WebSocket server to the `polymarket_hybrid_bot` that sa
 
 **Choice: `aiohttp.web`.**
 
-The bot's data feeds (`data_feeds/binance_feed.py`, `data_feeds/polymarket_feed.py`) already use `aiohttp` for HTTP client work. The same package exposes a full-featured HTTP server via `aiohttp.web`. Importing `aiohttp.web` for the server adds **zero new entries** to `requirements.in` or `requirements.txt` — the package is already pinned at `aiohttp==3.10.10`.
+The bot's data feeds (`data_feeds/spot_feed.py`, `data_feeds/polymarket_feed.py`) already use `aiohttp` for HTTP client work. The same package exposes a full-featured HTTP server via `aiohttp.web`. Importing `aiohttp.web` for the server adds **zero new entries** to `requirements.in` or `requirements.txt` — the package is already pinned at `aiohttp==3.10.10`.
 
 FastAPI would add two new direct dependencies (`fastapi`, `uvicorn`) plus Starlette's transitive chain. Those packages are not inherently risky, but introducing them into a dependency set that is already carefully version-pinned (CLAUDE.md hard rule 7 — eth-stack pins are load-bearing) creates unnecessary friction. FastAPI's automatic Pydantic request/response validation is useful, but the bot already uses Pydantic (`pydantic>=2.6.0,<3` in `requirements.in`) and calling `Model(**await request.json())` in aiohttp handlers is one line. The added validation expressiveness does not justify a new dependency.
 
@@ -498,7 +498,7 @@ The existing Prometheus exporter (`observability/metrics_exporter.py`) exposes b
 
 ## 6. Assumptions
 
-The following were taken as given based on reading `docs/BOT_CONTRACT.md` v1.0, `main.py`, `risk_manager.py`, `data_feeds/binance_feed.py`, `requirements.in`, and `requirements.txt`. If any assumption is wrong, the spec section that depends on it is noted.
+The following were taken as given based on reading `docs/BOT_CONTRACT.md` v1.0, `main.py`, `risk_manager.py`, `data_feeds/spot_feed.py`, `requirements.in`, and `requirements.txt`. If any assumption is wrong, the spec section that depends on it is noted.
 
 **A1. `aiohttp==3.10.10` includes `aiohttp.web` (server-side).** True — `aiohttp` ships both client and server components in the same package. The server-side `aiohttp.web` module has been available since aiohttp 1.x. Confirmed by: `requirements.in` line 35 `aiohttp==3.10.10`. No additional package needed. (Affects D-1.)
 

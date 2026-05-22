@@ -107,8 +107,9 @@ See `README.md:47-67` for the canonical tree. Load-bearing notes only:
 - `risk_manager.py` — authoritative gate; correlation guard now active post-T5
   (`risk_manager.py:190-213`)
 - `observability/metrics_exporter.py` — `/metrics` server, bound `127.0.0.1`
-- `data_feeds/` — Polymarket WS (with REST fallback for known 404), Binance
-  (with `BOT_DISABLE_BINANCE_FEED`), Polygon
+- `data_feeds/` — Polymarket WS (with REST fallback for known 404), spot feed
+  (Binance + Coinbase via ccxt; toggle Binance with `BOT_DISABLE_BINANCE_FEED`),
+  Polygon
 - `execution/clob_executor.py` — sim vs live CLOB, pending orders, fill reconciliation
 - `strategies/` — four strategies in priority order; smart-money still gated by T9
   `model_validator` (won't load if enabled with stub indexer)

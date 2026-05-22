@@ -120,6 +120,80 @@ work. See `.swarm-decisions.md` for per-sub-phase decision log entries.
 - Audit row B.5 (10-field RiskMetrics) deprecated; canonical 6-field
   Zod shape is authoritative (3e).
 
+### v0.2.9 follow-ups (post-wave)
+
+Follow-up commits landing after the main v0.2.9 wave above. All keep
+the v0.2.9 wire contract intact; the changes are wiring promotions,
+a renamed-for-accuracy class, formal stub closes, and an honest
+production fix.
+
+#### Added
+
+- **`monthlyPnl` wired** (commit `674d254`) — promoted from OQ-3 stub
+  to LIVE at the snapshot serialize boundary via
+  `utils.equity_curve.compute_monthly_pnl(snap.equity_history)`. No
+  schema/field/type change; the field flipped from always-emitting
+  `None`/`[]` to an actual rolling aggregate over the equity-history
+  deque already populated by `equity_snapshot_loop` (B.7).
+
+#### Changed
+
+- **`BinanceFeed` → `SpotFeed`** (commit `c78ff69`) — full rename
+  (class + module + test file): `data_feeds/binance_feed.py` →
+  `data_feeds/spot_feed.py`. The class has been multi-venue
+  (Binance + Coinbase via ccxt.pro) since v0.2.x; the Binance-only
+  name was vestigial from v0.2.0. **Preserved unchanged** (operator
+  surfaces): `BOT_DISABLE_BINANCE_FEED` env flag,
+  `binance_feed_disabled` log event, `binance_spot` /
+  `coinbase_spot` asyncio task labels — operators may have grep
+  scripts keyed on these.
+
+- **Conftest CLOB-stub guard tightened** (commit `0e9b962`) — the
+  test-suite `py_clob_client` fake stub previously only checked
+  `import py_clob_client.client` (package-existence), which masked
+  API drift. The guard now probes for every symbol the bot's import
+  block expects so failing any one triggers the stub.
+  Post-`d043038` the guard returns `True` against
+  `py-clob-client==0.22.0` and the stub does not fire.
+
+#### Fixed
+
+- **CLOB SDK API drift** (commit `d043038`, ref
+  `v029-clob-sdk-drift`) — the bot imported `Side` from
+  `py_clob_client.order_builder.constants`, which is not exported by
+  the installed `py-clob-client==0.22.0` (the module only exposes
+  bare `BUY = "BUY"` / `SELL = "SELL"` strings, and
+  `OrderArgs.side: str`). The `ImportError` was swallowed by the
+  broad `except Exception` guard, set `_CLOB_AVAILABLE = False`, and
+  surfaced in live mode as the misleading
+  `"py-clob-client-v2 is not installed"` RuntimeError. The five call
+  sites (`execution/clob_executor.py` + four strategy modules) now
+  pass the bare `intent.side` (already
+  `Literal["BUY","SELL"]`) directly to `OrderArgs.side`; the
+  `Side.BUY if ... else Side.SELL` ternary was a no-op rewrap. The
+  RuntimeError text was rewritten to name the real failure mode.
+  Sim mode was unaffected; live mode on the droplet was broken.
+
+#### Documented
+
+- **Backtest + bid/ask formally closed as intentional deferred
+  stubs** (commit `ed1a5fc`, refs `v029-backtest-close` and the
+  bid/ask close row in `.swarm-decisions.md`). `BacktestPoint` ships
+  `[]` from production because `BacktestEngine` lacks per-strategy
+  equity attribution — this is a feature-build task, not a wiring
+  task, and the engine's aggregate `equity_curve` cannot back-fill
+  the dashboard's 4-field per-strategy shape. `PriceTick.bid` /
+  `.ask` ship `null` per 3i lock 4; Zod
+  `PriceTickSchema.optional()` accommodates that perpetually, and no
+  dashboard consumer reads either field today.
+
+#### Tests
+
+- Test count: 303 (post-B.7 baseline) → **376** (post-`d043038`),
+  with the 6+ live-fill-reconciliation tests now running against the
+  REAL SDK (not the conftest fake stub). Verified locally with
+  `pytest tests/` → 376 passed.
+
 ### Earlier in the [Unreleased] window — Phase E.1 (pre-v0.2.9 wave)
 
 Strategy-id translation at the FILL wire boundary and BotState
