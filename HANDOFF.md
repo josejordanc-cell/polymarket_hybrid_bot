@@ -35,6 +35,7 @@ First-time on a fresh host: `cp .env.example .env`, fill secrets, `chmod 600 .en
 | Polymarket WS **404** | REST polling fallback; not fixed in v0.2.1 |
 | Binance **451** | Geo / compliance; use non-US POP or disable feed; not fixed in v0.2.1 |
 | Image size | Slim runtime + venv; still monitor disk on 25 GB droplets |
+| Snapshot `positions[].strategy` mis-attribution | RiskManager `on_fill` BUY merge updates only `quantity`/`avg_price`, drops the 2nd strategy's tag; corrupt tag reaches the wire (`risk_manager.py:262-270` → `api/routes_rest.py:116`). Fix fenced — see CHANGELOG `[Unreleased]` Known issues + `.swarm-decisions.md`. |
 
 ## Triage runbook
 

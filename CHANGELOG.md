@@ -187,6 +187,10 @@ production fix.
   `PriceTickSchema.optional()` accommodates that perpetually, and no
   dashboard consumer reads either field today.
 
+#### Known issues
+
+- **`positions[].strategy` mis-attribution after merge** (recording only — fix is fenced RiskManager territory). `RiskManager.on_fill` BUY branch (`risk_manager.py:262-270`) merges a second fill into an existing `market_id+outcome` key via `model_copy(update={quantity, avg_price})`, leaving `Position.strategy` untouched — so a second strategy on the same key keeps the first opener's tag. The serializer reads it straight off the merged Position (`api/routes_rest.py:116`), so the corrupt tag reaches the wire as `positions[].strategy`; dashboard panels grouping by it mis-allocate per-strategy splits in live mode (steady-state). See `.swarm-decisions.md` `v029-positions-strategy-attribution`.
+
 #### Tests
 
 - Test count: 303 (post-B.7 baseline) → **376** (post-`d043038`),
