@@ -1,6 +1,24 @@
 """
-data_feeds/binance_feed.py
+data_feeds/spot_feed.py
 Real-time spot price feed for BTC, ETH, SOL via ccxt.pro WebSocket.
+
+Despite the multi-venue scope (Binance + Coinbase via ``_run_venue``),
+this module was historically named ``binance_feed.py`` with a
+``BinanceFeed`` class. Renamed to ``spot_feed.py`` / ``SpotFeed`` in
+Round 9 to reflect actual scope; see ``.swarm-decisions.md`` entry
+``v029-spotfeed-rename`` for rationale.
+
+**Preserved operator-facing surfaces** (intentional non-renames):
+
+- ``BOT_DISABLE_BINANCE_FEED`` env flag — operator-facing ``.env``
+  contract; renaming would be a breaking change for existing deploys.
+  Refers to the *binance venue* subset within this SpotFeed, NOT the
+  entire feed.
+- ``binance_feed_disabled`` log event — operators may have grep
+  alerts / log-shipper rules on this exact string. Stability wins
+  over naming consistency. Same scope as the env flag.
+- ``name="binance_spot"`` / ``"coinbase_spot"`` asyncio task labels
+  — already follow the venue-as-prefix pattern; one task per venue.
 
 Maintains a rolling return history per symbol for momentum/z-score strategies.
 """
@@ -60,7 +78,7 @@ def _build_price_tick(symbol: str, price: float, ts: datetime) -> PriceTick:
     )
 
 
-class BinanceFeed:
+class SpotFeed:
     """
     Subscribes to Binance (primary) and Coinbase (secondary) via ccxt.pro.
     Falls back gracefully if a venue is unavailable.

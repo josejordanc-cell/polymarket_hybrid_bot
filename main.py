@@ -287,7 +287,7 @@ async def run_bot(mode: str) -> None:
 
     # All local imports deferred until after env is set
     from config import get_config
-    from data_feeds.binance_feed import BinanceFeed
+    from data_feeds.spot_feed import SpotFeed
     from data_feeds.polygon_feed import PolygonSmartMoneyFeed
     from data_feeds.polymarket_feed import PolymarketFeed, discover_liquid_markets
     from execution.clob_executor import CLOBExecutor
@@ -363,7 +363,7 @@ async def run_bot(mode: str) -> None:
 
     # ── Feeds ──────────────────────────────────────────────────────────────
     pm_feed = PolymarketFeed(config, market_ids=market_ids)
-    spot_feed = BinanceFeed(config)
+    spot_feed = SpotFeed(config)
     polygon_feed = PolygonSmartMoneyFeed(config)
 
     # ── Risk + strategies ──────────────────────────────────────────────────

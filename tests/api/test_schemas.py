@@ -1075,7 +1075,7 @@ def test_pricetick_ts_is_13_digit_epoch_ms() -> None:
 def test_pricetick_last_must_be_positive() -> None:
     """v0.2.9 3i: last is a price; gt=0 enforced at the model layer
     (defense-in-depth on top of the feed's own ``price > 0`` guard at
-    data_feeds/binance_feed.py:98)."""
+    data_feeds/spot_feed.py:98)."""
     with pytest.raises(ValidationError):
         PriceTick(symbol="BTC/USDT", last=0.0)
     with pytest.raises(ValidationError):

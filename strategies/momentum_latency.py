@@ -68,7 +68,7 @@ class MomentumLatencyStrategy:
         Args:
             snapshot:      Live Polymarket orderbook snapshot.
             symbol:        Spot symbol (e.g. 'BTC/USDT').
-            return_series: Log-return array from BinanceFeed.get_return_series().
+            return_series: Log-return array from SpotFeed.get_return_series().
         """
         sc = self._config.strategy
         if not sc.momentum_enabled:

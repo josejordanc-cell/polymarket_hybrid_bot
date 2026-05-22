@@ -1,13 +1,17 @@
-"""tests/feeds/test_binance_feed_tick_emit.py
+"""tests/feeds/test_spot_feed_tick_emit.py
 
 Coverage for the v0.2.9 3i TICK WS emit wire in
-``data_feeds/binance_feed.py``: the ``_build_price_tick`` helper, the
+``data_feeds/spot_feed.py``: the ``_build_price_tick`` helper, the
 per-stream 250 ms throttle, and the fire-and-forget broadcast via the
 global Emitter (mocked).
 
 Pure unit tests — no ccxt, no real WS connection, no real BotConfig.
-``_record`` is called directly on a constructed ``BinanceFeed`` with
+``_record`` is called directly on a constructed ``SpotFeed`` with
 the global emitter patched to an ``AsyncMock``.
+
+Renamed from ``test_binance_feed_tick_emit.py`` in Round 9 alongside
+the ``BinanceFeed`` → ``SpotFeed`` class / module rename; see
+``.swarm-decisions.md`` entry ``v029-spotfeed-rename``.
 """
 from __future__ import annotations
 
@@ -19,9 +23,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from api.schemas import PriceTick
-from data_feeds.binance_feed import (
+from data_feeds.spot_feed import (
     _TICK_EMIT_INTERVAL_SEC,
-    BinanceFeed,
+    SpotFeed,
     _build_price_tick,
 )
 
@@ -66,18 +70,18 @@ def test_build_price_tick_symbol_is_verbatim() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test fixtures for BinanceFeed instance
+# Test fixtures for SpotFeed instance
 # ---------------------------------------------------------------------------
 
 
-def _make_feed() -> BinanceFeed:
-    """Construct a BinanceFeed with a minimal mock config. We don't
+def _make_feed() -> SpotFeed:
+    """Construct a SpotFeed with a minimal mock config. We don't
     drive the ccxt run loop in any of these tests — just _record / the
     throttle / the emit path."""
     config = MagicMock()
     config.spot.binance_symbols = ["BTC/USDT", "ETH/USDT"]
     config.spot.coinbase_symbols = ["BTC/USD", "ETH/USD"]
-    return BinanceFeed(config)
+    return SpotFeed(config)
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +95,7 @@ async def test_record_emits_once_when_emitter_registered() -> None:
     feed = _make_feed()
     em = AsyncMock()
     em.broadcast = AsyncMock()
-    with patch("data_feeds.binance_feed.get_emitter", return_value=em):
+    with patch("data_feeds.spot_feed.get_emitter", return_value=em):
         await feed._record("binance", "BTC/USDT", 77800.0)
         # asyncio.create_task schedules the broadcast on the running
         # loop; yield once so the task actually executes.
@@ -113,7 +117,7 @@ async def test_record_no_emitter_silently_skips() -> None:
     raise — broadcast_fill precedent applies. _record completes
     cleanly and stores the tick locally."""
     feed = _make_feed()
-    with patch("data_feeds.binance_feed.get_emitter", return_value=None):
+    with patch("data_feeds.spot_feed.get_emitter", return_value=None):
         await feed._record("binance", "BTC/USDT", 77800.0)
         await asyncio.sleep(0)
 
@@ -129,7 +133,7 @@ async def test_throttle_suppresses_second_emit_within_250ms() -> None:
     feed = _make_feed()
     em = AsyncMock()
     em.broadcast = AsyncMock()
-    with patch("data_feeds.binance_feed.get_emitter", return_value=em):
+    with patch("data_feeds.spot_feed.get_emitter", return_value=em):
         await feed._record("binance", "BTC/USDT", 77800.0)
         await asyncio.sleep(0)
         # No real sleep between calls — elapsed ≪ 250 ms, throttle
@@ -149,7 +153,7 @@ async def test_throttle_allows_second_emit_after_250ms() -> None:
     feed = _make_feed()
     em = AsyncMock()
     em.broadcast = AsyncMock()
-    with patch("data_feeds.binance_feed.get_emitter", return_value=em):
+    with patch("data_feeds.spot_feed.get_emitter", return_value=em):
         await feed._record("binance", "BTC/USDT", 77800.0)
         await asyncio.sleep(0)
         assert em.broadcast.await_count == 1
@@ -173,7 +177,7 @@ async def test_throttle_is_per_stream_not_global() -> None:
     feed = _make_feed()
     em = AsyncMock()
     em.broadcast = AsyncMock()
-    with patch("data_feeds.binance_feed.get_emitter", return_value=em):
+    with patch("data_feeds.spot_feed.get_emitter", return_value=em):
         await feed._record("binance", "BTC/USDT", 77800.0)
         await asyncio.sleep(0)
         # Immediate second tick on a DIFFERENT stream — would be
@@ -197,7 +201,7 @@ async def test_throttle_is_per_symbol_within_same_venue() -> None:
     feed = _make_feed()
     em = AsyncMock()
     em.broadcast = AsyncMock()
-    with patch("data_feeds.binance_feed.get_emitter", return_value=em):
+    with patch("data_feeds.spot_feed.get_emitter", return_value=em):
         await feed._record("binance", "BTC/USDT", 77800.0)
         await asyncio.sleep(0)
         await feed._record("binance", "ETH/USDT", 3400.0)
@@ -214,7 +218,7 @@ async def test_emit_payload_matches_pricetick_model_dump() -> None:
     feed = _make_feed()
     em = AsyncMock()
     em.broadcast = AsyncMock()
-    with patch("data_feeds.binance_feed.get_emitter", return_value=em):
+    with patch("data_feeds.spot_feed.get_emitter", return_value=em):
         await feed._record("binance", "BTC/USDT", 77800.0)
         await asyncio.sleep(0)
 

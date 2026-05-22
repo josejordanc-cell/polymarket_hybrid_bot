@@ -680,7 +680,7 @@ class PriceTick(BaseModel):
       prefix.
     - ``last``   — last-traded price. Bot sources from
       ``utils.types.SpotTick.price`` (ccxt ticker ``last`` / ``close``
-      fallback at ``data_feeds/binance_feed.py``).
+      fallback at ``data_feeds/spot_feed.py``).
     - ``bid``    — Optional. Always ``None``. **Deferred indefinitely**;
       no dashboard consumer planned. The Zod ``.optional()`` on this
       field accommodates ``null`` perpetually. Reopen when a
