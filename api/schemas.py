@@ -493,7 +493,35 @@ class MonthlyPnl(BaseModel):
 
 
 class BacktestPoint(BaseModel):
-    """Mirrors BacktestPointSchema."""
+    """Internal placeholder — NOT the canonical Zod shape.
+
+    Zod ``BacktestPointSchema`` at
+    ``components/dashboard/schemas.ts:174`` defines the 4-field
+    per-strategy comparison shape ``{date: str, strategy1: number,
+    strategy2: number, strategy3: number}``. This bot Pydantic carries
+    the 3-field aggregate shape ``{ts, equity, drawdown}`` that
+    matches the bot's existing single-aggregate ``BacktestEngine``
+    output (``backtest.py``) — NOT the dashboard's per-strategy
+    expectation.
+
+    **The shape mismatch is intentional and deferred** per
+    ``.swarm-decisions.md`` entry ``v029-backtest-close`` (Round 8):
+    the bot's ``RiskManager`` has a single shared ``equity`` pool
+    across all three strategies, so the existing ``BacktestEngine``
+    cannot produce per-strategy parallel series without a fundamental
+    per-strategy attribution refactor. That refactor is a roadmap
+    feature, not a wiring task. Reshaping this Pydantic to the
+    4-field Zod canonical now would be busywork — the engine cannot
+    feed it.
+
+    Snapshot behavior: ``DashboardSnapshot.backtest`` ships ``[]``
+    permanently from the live bot until either (a) the engine gains
+    per-strategy attribution, (b) the dashboard pivots to consume
+    aggregate equity, or (c) backtest is formally declared a
+    CLI-only artifact never wired to the live snapshot. See the
+    ``v029-backtest-close`` row for the close decision + the three
+    reshape options recorded for any future revisitor.
+    """
 
     ts: int  # epoch ms
     equity: float
@@ -653,10 +681,12 @@ class PriceTick(BaseModel):
     - ``last``   — last-traded price. Bot sources from
       ``utils.types.SpotTick.price`` (ccxt ticker ``last`` / ``close``
       fallback at ``data_feeds/binance_feed.py``).
-    - ``bid``    — Optional. Always ``None`` in v0.2.9 3i (the spot
-      feed discards ccxt ``ticker["bid"]`` at ingestion today). Future
-      sub-phase can wire bid/ask through ``SpotTick``.
-    - ``ask``    — Optional. Same as ``bid``.
+    - ``bid``    — Optional. Always ``None``. **Deferred indefinitely**;
+      no dashboard consumer planned. The Zod ``.optional()`` on this
+      field accommodates ``null`` perpetually. Reopen when a
+      spread / orderbook panel is added on the dashboard side. See
+      ``.swarm-decisions.md`` entry ``v029-bidask-close`` (Round 8).
+    - ``ask``    — Optional. Same as ``bid`` — deferred indefinitely.
     - ``ts``     — Optional[int], Unix epoch **milliseconds**
       (13-digit). The bot always populates this in 3i via
       ``int(utc_now().timestamp() * 1000)``. Matches Team A's 3g Zod

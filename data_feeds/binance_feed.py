@@ -37,8 +37,13 @@ def _build_price_tick(symbol: str, price: float, ts: datetime) -> PriceTick:
     v0.2.9 3i policy locks applied:
       - Lock 1: ``symbol`` is the venue's native BASE/QUOTE form
         verbatim (no normalization).
-      - Lock 4: ``bid`` / ``ask`` ship ``None`` in v1 — the feed
-        discards ccxt's ``ticker["bid"]`` / ``["ask"]`` at ingestion.
+      - Lock 4: ``bid`` / ``ask`` ship ``None``. **Deferred
+        indefinitely** per Round 8's ``v029-bidask-close`` decision:
+        zero dashboard consumers today; reopen when a spread /
+        orderbook panel is added. The feed discards ccxt's
+        ``ticker["bid"]`` / ``["ask"]`` at ingestion (line ~97);
+        adding extraction is a small change (~10 LOC) but
+        unmotivated without a consumer.
       - Lock 5: ``ts`` is ``int(ts.timestamp() * 1000)`` — bot's own
         ``utc_now()`` converted to 13-digit epoch ms (matches Team A's
         3g ``.refine(v >= 1e12 && v < 1e14)`` guard).
@@ -49,8 +54,9 @@ def _build_price_tick(symbol: str, price: float, ts: datetime) -> PriceTick:
         symbol=symbol,
         last=price,
         ts=int(ts.timestamp() * 1000),
-        # bid/ask intentionally omitted — Pydantic defaults to None
-        # per 3i policy lock 4. Future sub-phase wires ccxt extraction.
+        # bid/ask intentionally omitted — Pydantic defaults to None.
+        # Deferred indefinitely per v029-bidask-close (Round 8);
+        # reopen when a spread/orderbook panel is added.
     )
 
 
