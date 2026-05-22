@@ -22,15 +22,9 @@ logger = structlog.get_logger(__name__)
 
 try:
     from py_clob_client.clob_types import OrderArgs
-    from py_clob_client.order_builder.constants import Side
     _CLOB_AVAILABLE = True
 except Exception:
     OrderArgs = dict  # type: ignore[assignment,misc]
-
-    class Side:  # type: ignore[no-redef]
-        BUY = "BUY"
-        SELL = "SELL"
-
     _CLOB_AVAILABLE = False
 
 
@@ -140,6 +134,6 @@ class SmartMoneyCopyStrategy:
             token_id=intent.token_id,
             price=intent.price_rounded(),
             size=intent.size,
-            side=Side.BUY if intent.side == "BUY" else Side.SELL,
+            side=intent.side,
         )
 

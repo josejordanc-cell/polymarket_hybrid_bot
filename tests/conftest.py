@@ -98,14 +98,14 @@ def _install_fake_py_clob_client() -> None:
 
 def _real_sdk_has_required_symbols() -> bool:
     """Probe whether the real installed SDK exposes every symbol the
-    bot's import block at ``execution/clob_executor.py:34-40`` (and
-    parallel imports in four strategy modules) expects.
+    bot's import block at ``execution/clob_executor.py`` (and parallel
+    imports in four strategy modules) expects.
 
-    ``v0.22.0`` of py-clob-client passes the package-existence check
-    (``py_clob_client.client`` imports) but FAILS this probe because
-    ``Side`` is not exported from ``order_builder.constants``. Same
-    failure mode as "not installed" for the bot's purposes. Returns
-    ``False`` to trigger the fake-stub installation.
+    Post-``v029-clob-sdk-drift`` the bot uses bare ``"BUY"``/``"SELL"``
+    strings on ``OrderArgs.side`` (str), so the only symbols required
+    are ``ClobClient`` / ``ApiCreds`` / ``OrderArgs`` — all three are
+    present in ``py-clob-client==0.22.0``. Returns ``False`` only when
+    the package is genuinely absent.
     """
     try:
         from py_clob_client.client import ClobClient  # noqa: F401
@@ -113,7 +113,6 @@ def _real_sdk_has_required_symbols() -> bool:
             ApiCreds,
             OrderArgs,
         )
-        from py_clob_client.order_builder.constants import Side  # noqa: F401
         return True
     except ImportError:
         return False

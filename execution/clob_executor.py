@@ -33,7 +33,6 @@ logger = structlog.get_logger(__name__)
 try:
     from py_clob_client.client import ClobClient
     from py_clob_client.clob_types import ApiCreds, OrderArgs
-    from py_clob_client.order_builder.constants import Side
     _CLOB_AVAILABLE = True
 except Exception:
     ClobClient = None  # type: ignore[assignment]
@@ -119,8 +118,13 @@ class CLOBExecutor:
         if config.runtime.mode == "live":
             if not _CLOB_AVAILABLE:
                 raise RuntimeError(
-                    "py-clob-client-v2 is not installed.\n"
-                    "Run: pip install py-clob-client"
+                    "py-clob-client SDK symbols failed to import at module load "
+                    "(ClobClient / ApiCreds / OrderArgs). The package may be "
+                    "installed but exposing a different API surface than this "
+                    "bot expects. Verify the package is present with "
+                    "`pip show py-clob-client`, then confirm the installed "
+                    "version exposes those three symbols (the bot is built "
+                    "against py-clob-client==0.22.0 — see requirements.txt)."
                 )
             api = config.api
             self._client = ClobClient(
@@ -326,7 +330,7 @@ class CLOBExecutor:
                 token_id=intent.token_id,
                 price=intent.price_rounded(),
                 size=intent.size,
-                side=Side.BUY if intent.side == "BUY" else Side.SELL,
+                side=intent.side,
             )
 
             resp = self._client.create_and_post_order(order_args)
