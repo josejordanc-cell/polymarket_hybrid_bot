@@ -23,7 +23,8 @@ Doc map — one line each:
 - `docs/FINAL_CODE_REVIEW.md` — engineering review
 - `docs/NEXT_STEPS.md` — current priority list
 - `TESTING_CHECKLIST.md` — quick smoke tests (at repo root, NOT under `docs/`)
-- `deploy/DEPLOY_DO.md` — droplet + UFW + cron
+- `DEPLOY_DO.md` — droplet + UFW + cron (root, canonical; the older `deploy/DEPLOY_DO.md` predates the v0.2.3 chown fix)
+- `DROPLET_REDEPLOY.md` — v0.2.8 → main droplet redeploy runbook (produced 2026-05-26; deferred-not-executed)
 - `SECURITY.md` — disclosure policy
 - `docs/SECURITY_REVIEW.md` — v2 documentation security review
 - `CHANGELOG.md` — latest entry only

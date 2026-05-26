@@ -190,6 +190,16 @@ production fix.
   `PriceTickSchema.optional()` accommodates that perpetually, and no
   dashboard consumer reads either field today.
 
+- **Droplet redeploy runbook for v0.2.8 → main** (commit `da0a2e6`). New
+  `DROPLET_REDEPLOY.md` at repo root documents the operator-side
+  procedure to bring the production droplet (`157.230.63.174`, currently
+  on `swarm/team-b-phase-d` @ `77b3ccd` / image
+  `polymarket_hybrid_bot:0.2.4`) up to main. Covers rollback-image
+  capture (the `:0.2.4` tag is reused by the next build — capture image
+  ID, not tag), `.bak` cleanup, the dirty `127.0.0.1:8080:8080`
+  loopback ports block, and the bidirectional smoke gates. Produced and
+  DEFERRED — not executed.
+
 #### Known issues
 
 - **`positions[].strategy` mis-attribution after merge** (recording only — fix is fenced RiskManager territory). `RiskManager.on_fill` BUY branch (`risk_manager.py:262-270`) merges a second fill into an existing `market_id+outcome` key via `model_copy(update={quantity, avg_price})`, leaving `Position.strategy` untouched — so a second strategy on the same key keeps the first opener's tag. The serializer reads it straight off the merged Position (`api/routes_rest.py:116`), so the corrupt tag reaches the wire as `positions[].strategy`; dashboard panels grouping by it mis-allocate per-strategy splits in live mode (steady-state). See `.swarm-decisions.md` `v029-positions-strategy-attribution`.

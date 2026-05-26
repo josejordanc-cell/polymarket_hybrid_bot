@@ -2,7 +2,7 @@
 
 Async Polymarket hybrid strategies (sim default): feeds → risk → priority strategy loop → CLOB execution.
 
-## Status (post-v0.2.4)
+## Status (post-v0.2.9)
 
 | Area | Status |
 | --- | --- |
@@ -116,6 +116,7 @@ Top-level files in this repo:
 - `CLAUDE.md` — project-level agent discipline rules and observability invariants for AI coding agents working on this repo. Complements `~/.claude/CLAUDE.md` (global). See file for the 12 hard rules and `/verify` auto-invocation triggers.
 - `LICENSE` — proprietary license. All Rights Reserved.
 - `HANDOFF.md` — deployment history and incident runbook.
+- `DROPLET_REDEPLOY.md` — v0.2.8 → main droplet redeploy runbook (produced 2026-05-26; deferred-not-executed).
 - `SECURITY.md` — disclosure policy.
 - `CHANGELOG.md` — version history.
 - `TESTING_CHECKLIST.md` — quick smoke tests.
@@ -131,4 +132,4 @@ Documentation under `docs/`:
 
 Deploy under `deploy/`:
 
-- `deploy/DEPLOY_DO.md` — droplet, UFW, and cron runbook.
+- `deploy/DEPLOY_DO.md` — older v0.2.0-era droplet guide; see root `DEPLOY_DO.md` (line 108 above) for the canonical runbook.

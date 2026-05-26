@@ -1,4 +1,4 @@
-# HANDOFF — polymarket_hybrid_bot (v0.2.1)
+# HANDOFF — polymarket_hybrid_bot
 
 ## TL;DR
 
@@ -9,6 +9,8 @@ git pull && ./deploy/rebuild.sh
 First-time on a fresh host: `cp .env.example .env`, fill secrets, `chmod 600 .env`, then `./deploy/rebuild.sh`.
 
 ## What changed since v0.2.0
+
+> For releases after v0.2.1, see `CHANGELOG.md`. The list below is the original v0.2.1→v0.2.0 delta, preserved for history.
 
 1. **Dependency conflict** — `py-clob-client==0.22.0` triple-pins `eth-account===0.13.0`. The old `web3<7` constraint required `eth-account<0.13`. **Fix:** `web3==7.6.0` plus explicit `hexbytes>=1.2.0,<2.0.0`. Do **not** downgrade `eth-account`.
 2. **Multi-stage Dockerfile** — Builder installs wheels with `gcc` / `build-essential`; runtime image is slim Bookworm + copied venv (~280 MB class target; measure on your registry).
@@ -121,6 +123,10 @@ strategy loop.
 The proper fix (deploy as a non-root `bot` user) is still tracked for v0.3.0.
 The chown is a quick fix that will need to be redone if the droplet is
 re-cloned from scratch.
+
+## Droplet state (2026-05-26)
+
+Droplet (157.230.63.174) currently runs branch swarm/team-b-phase-d @ 77b3ccd (tag v0.2.8), container image polymarket_hybrid_bot:0.2.4, healthy. Redeploy to main is PRODUCED but DEFERRED (not executed) as of 2026-05-26 — see DROPLET_REDEPLOY.md. Gated on the 1 GB→2 GB RAM decision.
 
 ## Agent discipline
 
