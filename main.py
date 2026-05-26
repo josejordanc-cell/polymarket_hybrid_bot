@@ -409,7 +409,7 @@ async def run_bot(mode: str) -> None:
 
         tasks.append(
             asyncio.create_task(
-                http_server_run(state, config, _SHUTDOWN),
+                http_server_run(state, config, _SHUTDOWN, risk=risk),
                 name="http_api_server",
             )
         )

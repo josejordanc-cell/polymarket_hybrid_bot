@@ -43,6 +43,8 @@ async def run(
     state: BotState,
     config: Any,
     shutdown: asyncio.Event,
+    *,
+    risk: Any = None,
 ) -> None:
     """Start the aiohttp HTTP server and run until ``shutdown`` is set.
 
@@ -111,6 +113,27 @@ async def run(
         name="equity_snapshot_loop",
     )
 
+    # Profitability epic piece (2b) wiring: start the RiskManager →
+    # BotState polling mirror. Atomically writes risk.equity /
+    # risk.open_positions / risk.daily_pnl_snapshot().start_equity_usd
+    # into BotState every 5s so /dashboard/snapshot returns live values
+    # rather than the frozen startup snapshot from BotState.from_risk.
+    # Reads use public accessors only — no risk_manager.py edits (FENCED).
+    # Lifecycle mirrors equity_task exactly. Gated on risk being passed:
+    # tests that call run() without risk (kwarg-only, default None) skip
+    # the mirror task entirely, preserving the pre-(2b) test signature.
+    # See utils/risk_state_mirror.py and .swarm-decisions.md
+    # b1-fill-runtime-update for the parallel (2a) deferral context.
+    risk_mirror_task: "asyncio.Task | None"
+    if risk is not None:
+        from utils.risk_state_mirror import mirror_risk_to_botstate
+        risk_mirror_task = asyncio.create_task(
+            mirror_risk_to_botstate(risk, state),
+            name="risk_state_mirror",
+        )
+    else:
+        risk_mirror_task = None
+
     app[CONFIG_KEY] = config
     app.router.add_get("/ws", ws_handler)
 
@@ -146,6 +169,20 @@ async def run(
             logger.warning(
                 "equity_snapshot_loop_shutdown_error", exc_info=True
             )
+
+        # (2b) mirror shutdown: identical cancel-and-await pattern.
+        # Only present when risk was passed at start; tests that omit
+        # risk skip both creation and teardown.
+        if risk_mirror_task is not None:
+            risk_mirror_task.cancel()
+            try:
+                await risk_mirror_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "risk_state_mirror_shutdown_error", exc_info=True
+                )
 
         await runner.cleanup()
         logger.info("api_server_stopped")
