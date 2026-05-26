@@ -303,6 +303,8 @@ Per-sub-phase rationale and decision trail live in
 `.swarm-decisions.md` (look for entries prefixed `v029-`). The
 CHANGELOG.md `[Unreleased]` block has the user-facing summary.
 
+> **Caveat (2026-05-26):** "wired" ≠ live values — the risk/equity/monthlyPnl chains read a frozen state.equity. See CHANGELOG [Unreleased] Known issues ("BotState is a one-time startup snapshot").
+
 Three operational follow-ups for contributors:
 
 ### PATH-A callsite-hook guidance (when to opt in)

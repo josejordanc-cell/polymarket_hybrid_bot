@@ -63,6 +63,8 @@ work. See `.swarm-decisions.md` for per-sub-phase decision log entries.
 
 #### Snapshot history wiring (BotState writers for previously-stub slices)
 
+> **Caveat:** these describe helper-side wiring only; equity/monthlyPnl/risk read a frozen state.equity in normal operation. See [Unreleased] Known issues ("BotState is a one-time startup snapshot").
+
 - **B.9 alerts** — `utils.alerts._broadcast_dashboard` atomically
   appends a wire-shape AlertItem to `BotState.recent_alerts` under
   `state.write_lock` BEFORE the WS broadcast. Reconnecting client sees
@@ -135,6 +137,7 @@ production fix.
   schema/field/type change; the field flipped from always-emitting
   `None`/`[]` to an actual rolling aggregate over the equity-history
   deque already populated by `equity_snapshot_loop` (B.7).
+  Caveat: structurally flat in normal operation (frozen state.equity); see [Unreleased] Known issues.
 
 #### Changed
 
