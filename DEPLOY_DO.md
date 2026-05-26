@@ -55,7 +55,7 @@ git pull
 | `451` from Binance | Move region or `DISABLE_BINANCE_FEED=1` |
 | WS 404 spam | Expected; REST fallback — see `README.md` |
 | Healthcheck failing | Ensure `/tmp/.bot_alive` is touched (runtime heartbeat task); check `docker inspect` health |
-| No trades in weekly report | `data/trades.jsonl` missing or empty — writer may not exist yet |
+| No trades in weekly report | `data/trades.jsonl` missing = `BOT_DATA_DIR` mount issue (check named volume + `BOT_DATA_DIR=/app/data` env); empty = no fills yet in the window (writer landed d079f93, fires per accepted fill) |
 
 ## Running as root on the droplet (current state)
 

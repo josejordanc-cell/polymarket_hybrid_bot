@@ -59,7 +59,7 @@ First-time on a fresh host: `cp .env.example .env`, fill secrets, `chmod 600 .en
 
 ### Weekly report empty or failing
 
-- `BOT_DATA_DIR/trades.jsonl` must exist for non-empty aggregates (writer may land in a future release).
+- `BOT_DATA_DIR/trades.jsonl` is written automatically on every accepted fill by `utils/trades.persist_fill` (d079f93). Empty file = no fills yet in the window; missing file = `BOT_DATA_DIR` mount issue (check the `market_cache_data` volume in `docker-compose.yml` and the explicit `BOT_DATA_DIR=/app/data` env pin).
 - Run: `docker compose exec -T bot python -m scripts.weekly_report --weeks 1 -v`
 
 ## Open questions for the next maintainer

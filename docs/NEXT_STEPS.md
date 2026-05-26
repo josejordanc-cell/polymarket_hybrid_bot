@@ -2,14 +2,19 @@
 
 Rough effort and dependencies. Dates relative to **2026-05-02**.
 
-> **Status orientation (2026-05-21):** v0.2.0 shipped, and the v0.2.9 wave
-> shipped the dashboard wire-shape alignment + snapshot history wiring
-> (`positions` / `fills` / `risk` / `equity` / `logs` / `alerts`). Items
-> marked **DONE** below are already in `main`; the live priorities are
-> the still-open items + anything new captured under
-> `CHANGELOG.md` `[Unreleased]`. The §4 "Dashboard integration" block is
-> superseded by the v0.2.9 wave — see CHANGELOG and
-> `.swarm-decisions.md` (entries prefixed `v029-`) for details.
+> **Status orientation (2026-05-21, updated 2026-05-26):** v0.2.0 shipped,
+> and the v0.2.9 wave shipped the dashboard wire-shape alignment + snapshot
+> history wiring (`positions` / `fills` / `risk` / `equity` / `logs` /
+> `alerts`). The 2026-05-26 profitability epic shipped fence-safe pieces
+> (1) `utils/trades.persist_fill` and (2a) `utils/fills.append_state_fill_record`
+> in commit `d079f93`; piece (2b) — equity/positions BotState mirror — is
+> fence-adjacent and remains deferred. Owed runtime gap: sim-mode smoke on
+> the droplet after the pending v0.2.8 → main redeploy
+> (`DROPLET_REDEPLOY.md`). Items marked **DONE** below are already in
+> `main`; the live priorities are the still-open items + anything new
+> captured under `CHANGELOG.md` `[Unreleased]`. The §4 "Dashboard integration"
+> block is superseded by the v0.2.9 wave — see CHANGELOG and
+> `.swarm-decisions.md` (entries prefixed `v029-` and `b1-`) for details.
 
 ---
 
@@ -78,10 +83,10 @@ remains accurate.
 | Item | Effort | Why first / later |
 |------|--------|-------------------|
 | **Correlation guard fix** | 1 PR | **DONE** 2026-05-08 — T5, PR #28, commit `704ddcc` (see §3 above) |
-| **Trade ledger DB** | Multi-day | Unblocks accurate reporting without log scrape |
+| **Trade ledger DB** | Multi-day | **Partial** — JSONL ledger landed d079f93 (`utils/trades.persist_fill` writes `BOT_DATA_DIR/trades.jsonl` per accepted fill); full DB / indexed store remains future work for high-volume aggregation |
 | **pending_orders persistence** | Medium | If restarts during live cause pain |
 | **Polygon settlement listener** | Multi-day | Latency-sensitive strategies only |
 | **pUSD in wallet_reconcile** | Medium | Reduces false drift alerts |
-| **Sharpe/Sortino in weekly report** | Small PR | After stable equity series / DB |
+| **Sharpe/Sortino in weekly report** | Small PR | Input now available (trades.jsonl writer landed d079f93); still gated on a stable equity series (piece 2b — equity/positions BotState mirror, fence-adjacent, deferred) before realized-PnL aggregation is meaningful |
 
 Honest sizing: **ledger DB + listener** are **multi-day refactors**; correlation fix and Sharpe are **single PR** scale.

@@ -2,7 +2,7 @@
 
 Async Polymarket hybrid strategies (sim default): feeds → risk → priority strategy loop → CLOB execution.
 
-## Status (post-v0.2.9)
+## Status (post-v0.2.8 + [Unreleased])
 
 | Area | Status |
 | --- | --- |
@@ -11,7 +11,7 @@ Async Polymarket hybrid strategies (sim default): feeds → risk → priority st
 | REST (Polymarket / Gamma) | Primary data path |
 | WebSocket (Polymarket CLOB) | **Degraded** — CLOB WebSocket upgrade may return **404**; the bot uses REST polling as the stable operational fallback |
 | Binance spot feed | **Disabled by default in restricted regions via** `BOT_DISABLE_BINANCE_FEED=true` (added in T11). Without the flag, US/most DO POPs still receive HTTP 451 from `api.binance.com`. Coinbase remains the live reference feed in those regions. |
-| Weekly report (`scripts/weekly_report.py`) | Reads `data/trades.jsonl` JSONL; empty / missing file handled gracefully |
+| Weekly report (`scripts/weekly_report.py`) | Reads `data/trades.jsonl` JSONL — now written automatically by `utils/trades.persist_fill` on every accepted fill (d079f93). Empty / missing file still handled gracefully. |
 | HTTP/WebSocket dashboard API (v0.2.6+) | **Optional, disabled by default.** Set `BOT_HTTP_API_ENABLED=true` plus `BOT_HTTP_API_BOT_API_TOKEN` and `BOT_HTTP_API_WS_TICKET_SECRET` to expose `GET /dashboard/snapshot`, `POST /api/strategies/config`, `POST /emergency-stop` (Bearer auth) and `GET /ws` (HS256 JWT ticket auth via `?ticket=<jwt>`). Bind defaults to `0.0.0.0:8080` inside the container — pair with a loopback `ports:` block in `docker-compose.yml` (`127.0.0.1:8080:8080`) for droplet exposure. D.2.4 (v0.2.8) shipped FILL + ALERT WS broadcasts; v0.2.9 sub-phase 3i added throttled TICK broadcasts from the spot feed. STRATEGY_UPDATE emit remains deferred to the strategy-telemetry pipeline (per `docs/audit/d24-emit-site-audit.md` §10 correction). v0.2.9 also wired snapshot history for `positions` / `fills` / `alerts` / `logs` / `equity` slices and added sim-mode-only `/debug/inject-*` endpoints for operator smoke; see `api/` module, `SECURITY.md` "Debug-injection endpoints", and CHANGELOG. |
 
 ## Quick start
