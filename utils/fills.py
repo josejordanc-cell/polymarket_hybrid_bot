@@ -112,3 +112,59 @@ async def broadcast_fill(
         await em.broadcast({"type": "FILL", "payload": payload})
     except Exception as exc:
         logger.warning("dashboard_fill_broadcast_failed", error=str(exc))
+
+
+async def append_state_fill_record(
+    state,
+    *,
+    market_id: str,
+    outcome: Literal["YES", "NO"],
+    fill_price: float,
+    filled_size: float,
+    strategy: str,
+) -> None:
+    """Append a FillRecord to ``state.recent_fills`` under ``write_lock``.
+
+    Profitability epic piece (2a) — mirror of ``broadcast_fill``'s payload
+    shape into BotState so ``GET /dashboard/snapshot`` returns non-empty
+    ``fills[]`` in normal operation (previously the slice was always ``[]``
+    in non-test code; see ``.swarm-decisions.md`` ``profitability-telemetry-gap``).
+
+    Uses ``appendleft`` to honor the "newest at left" invariant documented
+    in ``api/state.py:20``. (The existing ``inject_position_handler`` uses
+    plain ``append`` — that's a separate latent bug, flagged in CHANGELOG
+    but not fixed here per coordinator lock.)
+
+    Strategy translation via ``bot_to_dashboard`` mirrors ``broadcast_fill``
+    so the wire-side representation is consistent across both transports.
+
+    Never raises. ``smart_money_copy`` (no v1.0 contract id) → ``ValueError``
+    from ``bot_to_dashboard`` is caught and logged; no state mutation occurs
+    in that branch.
+    """
+    # FillRecord lazy-imported here (not at module top) to avoid pulling
+    # api.schemas at module-import time; bot_to_dashboard is already
+    # module-level at line 29.
+    from api.schemas import FillRecord
+
+    try:
+        record = FillRecord(
+            id=uuid.uuid4().hex,
+            time=_time_mod.strftime("%H:%M:%S", _time_mod.localtime()),
+            symbol=market_id[:12],
+            action=("UP" if outcome == "YES" else "DOWN"),
+            price=float(fill_price),
+            size=float(filled_size),
+            pnl=None,
+            status="filled",
+            strategy=bot_to_dashboard(str(strategy)),
+        )
+        async with state.write_lock:
+            state.recent_fills.appendleft(record)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "state_fill_record_append_failed",
+            error=str(exc),
+            market_id=market_id,
+            strategy=strategy,
+        )

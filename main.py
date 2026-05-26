@@ -25,6 +25,7 @@ import time
 
 # Logging configured before any other local import
 from utils.logging import configure_logging
+from utils.trades import persist_fill
 
 _SHUTDOWN = asyncio.Event()
 
@@ -291,7 +292,7 @@ async def run_bot(mode: str) -> None:
     from data_feeds.polygon_feed import PolygonSmartMoneyFeed
     from data_feeds.polymarket_feed import PolymarketFeed, discover_liquid_markets
     from execution.clob_executor import CLOBExecutor
-    from risk_manager import RiskManager
+    from risk_manager import POLYMARKET_FEE_PER_SIDE, RiskManager
     from strategies.intra_arbitrage import IntraArbitrageStrategy, reconcile_arb_bundle
     from strategies.market_maker import MarketMakerStrategy
     from strategies.momentum_latency import MomentumLatencyStrategy
@@ -319,7 +320,7 @@ async def run_bot(mode: str) -> None:
             notify_fill_metrics,
             set_metrics_exporter,
         )
-        from utils.fills import broadcast_fill
+        from utils.fills import append_state_fill_record, broadcast_fill
 
         metrics = MetricsExporter(
             experiment_id=config.experiment_id,
@@ -329,7 +330,7 @@ async def run_bot(mode: str) -> None:
         set_metrics_exporter(metrics)
     else:
         from observability.metrics_exporter import notify_fill_metrics, set_metrics_exporter
-        from utils.fills import broadcast_fill
+        from utils.fills import append_state_fill_record, broadcast_fill
 
         set_metrics_exporter(None)
 
@@ -542,6 +543,38 @@ async def run_bot(mode: str) -> None:
                             size=float(result.filled_size),
                             strategy=intent.strategy,
                             pnl=None,
+                        )
+                        # Profitability epic piece (1): persistent trade ledger.
+                        # Reads risk.equity AFTER risk.on_fill mutated it (line 519-523).
+                        # POLYMARKET_FEE_PER_SIDE imported read-only — does not
+                        # touch fence behavior. See .swarm-decisions b1-trades-writer-wiring.
+                        _fill_px = float(
+                            result.fill_price
+                            if result.fill_price is not None
+                            else intent.price_rounded()
+                        )
+                        persist_fill(
+                            market_id=intent.market_id,
+                            outcome=intent.outcome,
+                            side=intent.side,
+                            strategy=intent.strategy,
+                            fill_price=_fill_px,
+                            filled_size=float(result.filled_size),
+                            fee_usdc=_fill_px * float(result.filled_size) * POLYMARKET_FEE_PER_SIDE,
+                            equity_after=float(risk.equity),
+                            tif=intent.tif,
+                            order_id=getattr(result, "order_id", None),
+                        )
+                        # Profitability epic piece (2a): mirror the fill into
+                        # BotState so /dashboard/snapshot returns non-empty fills[].
+                        # See .swarm-decisions b1-recent-fills-mirror.
+                        await append_state_fill_record(
+                            state,
+                            market_id=intent.market_id,
+                            outcome=intent.outcome,
+                            fill_price=_fill_px,
+                            filled_size=float(result.filled_size),
+                            strategy=intent.strategy,
                         )
                         record_fill_return_for_correlation(
                             risk,

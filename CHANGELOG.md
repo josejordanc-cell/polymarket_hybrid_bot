@@ -217,6 +217,104 @@ production fix.
   REAL SDK (not the conftest fake stub). Verified locally with
   `pytest tests/` → 376 passed.
 
+### Profitability epic — pieces (1) + (2a)
+
+Fence-safe pair from the profitability-telemetry-gap recon
+(`.swarm-decisions.md` `profitability-telemetry-gap`, 2026-05-26).
+`risk_manager.py` is untouched. Piece (2b) — equity/positions BotState
+mirror — is fence-adjacent and DEFERRED to a separate locked task.
+
+#### Added
+
+- **`utils/trades.py` — persistent trade ledger writer.** New module
+  exporting `persist_fill(...)`, called from `main.py:_exec_and_record`
+  adjacent to the existing `broadcast_fill` call. Appends one
+  pinned-schema JSON line per accepted fill to
+  `BOT_DATA_DIR/trades.jsonl`. Closes the long-standing gap where
+  `scripts/weekly_report.py` always returned `"No trade log at ..."`
+  on a real deployment (HANDOFF.md:60). Schema (12 fields + 1
+  optional): `ts` (ISO 8601 Z), `status="filled"`, `market_id`,
+  `outcome`, `side`, `strategy` (internal name, not translated),
+  `price`, `size`, `fee_usdc`, `equity_after`, `tif`, `order_id?`.
+  All readable by `weekly_report.py`'s flexible-alias reader.
+  Fire-and-forget; never raises. See `.swarm-decisions.md`
+  `b1-trades-writer-wiring` for the locked decisions.
+- **`utils/fills.append_state_fill_record`** — async helper that
+  appends a wire-shape `FillRecord` to `BotState.recent_fills`
+  under `state.write_lock`. Called from `main.py:_exec_and_record`
+  alongside `broadcast_fill` and `persist_fill`. Flips
+  `/dashboard/snapshot`'s `fills[]` slice from always-empty in
+  normal operation to a rolling 200-deep window of the most recent
+  fills. Uses `appendleft` per the "newest at left" invariant
+  documented at `api/state.py:20`. See `.swarm-decisions.md`
+  `b1-recent-fills-mirror`.
+- **`docker-compose.yml`** — explicit `BOT_DATA_DIR=/app/data`
+  environment pin. Belt-and-suspenders: the relative `"data"`
+  default also resolves to `/app/data` via the `/app` workdir, but
+  the explicit pin protects against future workdir or default-value
+  drift. `/app/data` is mounted on the `market_cache_data` named
+  volume, so `trades.jsonl` persists across container rebuilds.
+- **`.env.example`** — documentation block for `BOT_DATA_DIR`
+  explaining the default, the container-volume implication, and
+  when to override.
+
+#### Fixed
+
+- **No persistent trade writer** (CHANGELOG [Unreleased] Known
+  issues, recon at `f8570c5`) — closed by `utils/trades.persist_fill`
+  above. `scripts/weekly_report.py` now sees real input on every
+  fill in both sim and live modes.
+
+#### Tests
+
+- `tests/test_trades_writer.py` (10 tests) — `persist_fill` direct
+  unit coverage: row schema, sequential appends, missing-dir
+  creation, permission-error swallow, env-var resolution,
+  weekly-report round-trip, concurrent writes, zero-fee acceptance.
+- `tests/test_recent_fills_mirror.py` (6 tests) —
+  `append_state_fill_record` direct unit coverage: FillRecord
+  construction, outcome→action mapping, `appendleft` ordering,
+  `maxlen=200` enforcement, smart-money `ValueError` swallowed,
+  write-lock honored under `asyncio.gather`.
+
+#### Known gaps (owed)
+
+- **`main.py:_exec_and_record` runtime wiring is helper-unit-covered
+  but runtime-unverified.** The two new call sites (`persist_fill`
+  and `append_state_fill_record`) are exercised by Layer-1 + Layer-2
+  unit tests against the helpers directly, but no integration test
+  drives `_exec_and_record` end-to-end. `_exec_and_record` is a
+  nested coroutine inside the strategy loop with no module-level
+  handle; a refactor to make it directly testable is its own scope
+  and is NOT in this PR. Coverage will be closed by sim-mode smoke
+  on the droplet AFTER the pending v0.2.8 → main redeploy
+  (`DROPLET_REDEPLOY.md`). See `.swarm-decisions.md`
+  `b1-fill-runtime-deferred` for the owed-gap entry.
+
+#### Out of scope
+
+- **Piece (2b) — equity / `open_positions` BotState mirror.**
+  Fence-adjacent (any option — risk-manager observer, caller-side
+  dual-write, polling loop, computed property — touches the
+  RiskManager state surface in some way). Separate locked task.
+  Until then, `state.equity` / `state.open_positions` remain the
+  one-time startup snapshot documented in [Unreleased] Known
+  issues "BotState is a one-time startup snapshot".
+- **Five `GlobalStats` zero stubs** at `api/routes_rest.py:247-251`
+  (`pnlMonth`, `pnlAllTime`, `winRate`, `totalTrades`, `streak`).
+  Need a derived-stats pipeline that doesn't exist today. Not
+  addressable by pieces (1)+(2a) alone.
+
+#### Noted (not fixed)
+
+- **`inject_position_handler` uses `append` (not `appendleft`)** at
+  `api/routes_rest.py:558`, contradicting the "newest at left"
+  invariant documented at `api/state.py:20`. The production fill
+  path added in this PR (`append_state_fill_record`) uses
+  `appendleft` correctly. `inject_position_handler` is a sim-mode-
+  only debug endpoint; its ordering bug is latent and low-impact.
+  Fix deferred to a separate one-line cleanup.
+
 ### Earlier in the [Unreleased] window — Phase E.1 (pre-v0.2.9 wave)
 
 Strategy-id translation at the FILL wire boundary and BotState

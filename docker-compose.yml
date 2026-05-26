@@ -14,6 +14,14 @@ services:
     env_file:
       - .env
 
+    environment:
+      # Profitability epic piece (1): pin BOT_DATA_DIR explicitly so
+      # trades.jsonl lands in the market_cache_data named volume even if
+      # the in-container workdir or default ever changes. Belt-and-
+      # suspenders — the relative "data" default also resolves here via
+      # the /app workdir.
+      BOT_DATA_DIR: /app/data
+
     volumes:
       - ./logs:/app/logs
       - market_cache_data:/app/data
