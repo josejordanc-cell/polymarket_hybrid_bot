@@ -304,7 +304,7 @@ Per-sub-phase rationale and decision trail live in
 `.swarm-decisions.md` (look for entries prefixed `v029-`). The
 CHANGELOG.md `[Unreleased]` block has the user-facing summary.
 
-> **Caveat (2026-05-26):** "wired" ≠ live values — the risk/equity/monthlyPnl chains read a frozen state.equity. See CHANGELOG [Unreleased] Known issues ("BotState is a one-time startup snapshot").
+> **Caveat (2026-05-26):** As of (2b) (commit `8ff2236`), `state.equity` is polled live from `risk.equity` every 5s, so the `equity` and `risk` chains are LIVE. `monthlyPnl` and the five `GlobalStats` zero stubs (pnlMonth/pnlAllTime/winRate/totalTrades/streak) remain deferred. See CHANGELOG [Unreleased] Known issues + "Profitability epic — piece (2b)" Added entry.
 
 Three operational follow-ups for contributors:
 

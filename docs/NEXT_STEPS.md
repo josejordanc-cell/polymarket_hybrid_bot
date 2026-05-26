@@ -5,16 +5,19 @@ Rough effort and dependencies. Dates relative to **2026-05-02**.
 > **Status orientation (2026-05-21, updated 2026-05-26):** v0.2.0 shipped,
 > and the v0.2.9 wave shipped the dashboard wire-shape alignment + snapshot
 > history wiring (`positions` / `fills` / `risk` / `equity` / `logs` /
-> `alerts`). The 2026-05-26 profitability epic shipped fence-safe pieces
-> (1) `utils/trades.persist_fill` and (2a) `utils/fills.append_state_fill_record`
-> in commit `d079f93`; piece (2b) — equity/positions BotState mirror — is
-> fence-adjacent and remains deferred. Owed runtime gap: sim-mode smoke on
-> the droplet after the pending v0.2.8 → main redeploy
-> (`DROPLET_REDEPLOY.md`). Items marked **DONE** below are already in
-> `main`; the live priorities are the still-open items + anything new
-> captured under `CHANGELOG.md` `[Unreleased]`. The §4 "Dashboard integration"
-> block is superseded by the v0.2.9 wave — see CHANGELOG and
-> `.swarm-decisions.md` (entries prefixed `v029-` and `b1-`) for details.
+> `alerts`). The 2026-05-26 profitability epic shipped pieces (1)
+> `utils/trades.persist_fill` and (2a) `utils/fills.append_state_fill_record`
+> in commit `d079f93`. Piece (2b) — equity/positions BotState mirror —
+> landed at commit `8ff2236` (turned out to be fence-safe via the
+> public-accessor polling-loop variant) and was runtime-verified live on
+> the droplet at commit `54cf1fc`. Owed runtime gap for (1)/(2a): no
+> deterministic trigger exists for the `_exec_and_record` fill path —
+> see `.swarm-decisions.md` `b1-fill-runtime-update` for close criteria.
+> Items marked **DONE** below are already in `main`; the live priorities
+> are the still-open items + anything new captured under
+> `CHANGELOG.md` `[Unreleased]`. The §4 "Dashboard integration" block is
+> superseded by the v0.2.9 wave — see CHANGELOG and
+> `.swarm-decisions.md` (entries prefixed `v029-`, `b1-`, and `2b-`) for details.
 
 ---
 
@@ -87,6 +90,6 @@ remains accurate.
 | **pending_orders persistence** | Medium | If restarts during live cause pain |
 | **Polygon settlement listener** | Multi-day | Latency-sensitive strategies only |
 | **pUSD in wallet_reconcile** | Medium | Reduces false drift alerts |
-| **Sharpe/Sortino in weekly report** | Small PR | Input now available (trades.jsonl writer landed d079f93); still gated on a stable equity series (piece 2b — equity/positions BotState mirror, fence-adjacent, deferred) before realized-PnL aggregation is meaningful |
+| **Sharpe/Sortino in weekly report** | Small PR | Input now available: trades.jsonl writer landed d079f93; stable equity series landed via (2b) BotState mirror at commit `8ff2236`. Still gated on a derived-stats pipeline that aggregates win/loss/Sharpe/Sortino from those inputs (separate scope; see CHANGELOG [Unreleased] "Five GlobalStats zero stubs" out-of-scope row). |
 
 Honest sizing: **ledger DB + listener** are **multi-day refactors**; correlation fix and Sharpe are **single PR** scale.

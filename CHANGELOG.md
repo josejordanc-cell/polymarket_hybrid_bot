@@ -63,7 +63,7 @@ work. See `.swarm-decisions.md` for per-sub-phase decision log entries.
 
 #### Snapshot history wiring (BotState writers for previously-stub slices)
 
-> **Caveat:** these describe helper-side wiring only; equity/monthlyPnl/risk read a frozen state.equity in normal operation. See [Unreleased] Known issues ("BotState is a one-time startup snapshot").
+> **Caveat (updated 2026-05-26):** As of (2b) (commit `8ff2236`), `state.equity` is polled live from `risk.equity` every 5s, so the `equity` and `risk` chains are LIVE. `monthlyPnl` and the five `GlobalStats` zero stubs (pnlMonth/pnlAllTime/winRate/totalTrades/streak) remain deferred. See [Unreleased] Known issues + "Profitability epic — piece (2b)" Added entry.
 
 - **B.9 alerts** — `utils.alerts._broadcast_dashboard` atomically
   appends a wire-shape AlertItem to `BotState.recent_alerts` under
@@ -137,7 +137,7 @@ production fix.
   schema/field/type change; the field flipped from always-emitting
   `None`/`[]` to an actual rolling aggregate over the equity-history
   deque already populated by `equity_snapshot_loop` (B.7).
-  Caveat: structurally flat in normal operation (frozen state.equity); see [Unreleased] Known issues.
+  Caveat (updated 2026-05-26): pre-(2b), the input chain (equity_history) was structurally flat in normal operation. As of (2b) (commit `8ff2236`), `state.equity` is polled live every 5s, so the input is no longer frozen. The compute_monthly_pnl helper still gates on ≥2 EquityPoints per calendar month before emitting non-empty rows, so meaningful monthly values appear ≥24h after restart — that gating is the deferred part.
 
 #### Changed
 
@@ -206,9 +206,9 @@ production fix.
 
 - **No persistent trade writer** (RESOLVED 2026-05-26 — see "Fixed: No persistent trade writer" entry under "Profitability epic — pieces (1) + (2a)" below). Historical recon: at the time of the `ef73056` recon, fill events logged to stdout only via structlog at `risk_manager.py:298` and `execution/clob_executor.py:182`; no code path in non-test code wrote `BOT_DATA_DIR/trades.jsonl`, so `scripts/weekly_report.py:137` (default `BOT_DATA_DIR/trades.jsonl`) always found the file missing on a real deployment and returned an empty `WeeklyReport` with the `"No trade log at ..."` note (`scripts/weekly_report.py:143-147`). Closed by `utils/trades.persist_fill` (d079f93).
 
-- **`BotState` is a one-time startup snapshot, not a live mirror** (recording only; same droplet caveat as above). `BotState.from_risk` is called once at `main.py:385` and copies `risk.equity` + `dict(risk._state.open_positions)` (`api/state.py:243-279`); nothing in non-test code subsequently writes `state.equity`, `state.day_start_equity`, `state.open_positions`, or `state.recent_fills`. The normal fill path (`main.py:518-545`) calls `risk.on_fill(...)` (mutates `risk._state` only), `notify_fill_metrics(...)`, and `broadcast_fill(...)` (WS-only; `utils/fills.py:97-114` never touches `state.recent_fills`). Consequences for `/dashboard/snapshot`: `GlobalStats.pnlToday = snap.equity - snap.day_start_equity` is always `0.0`; `equity_history` grows daily but every point carries the same frozen equity and `pnl=0.0` (`utils/equity_curve.py:99-103` reads frozen `state.equity`); `monthlyPnl` (`compute_monthly_pnl` at `utils/equity_curve.py:172-225`) resolves to `0.0` per month; `risk.maxDrawdown`/`sharpe`/`var95`/`exposurePct` (`api/routes_rest.py:_build_riskmetrics`, `:173-223`) degrade to `None` or zero on the flat series. (Note: as of d079f93, `state.recent_fills` now has a non-debug writer via `utils/fills.append_state_fill_record` — piece 2a. The frozen-equity argument here still holds for piece 2b, which is deferred.) Plus five `GlobalStats` fields are literal zero stubs at `api/routes_rest.py:247-251` (`pnlMonth`, `pnlAllTime`, `winRate`, `totalTrades`, `streak`).
+- **`BotState` is a one-time startup snapshot, not a live mirror** (RESOLVED for equity/positions/day_start_equity at 2026-05-26 — see "Profitability epic — piece (2b)" Added entry below; runtime-verified live on droplet at commit `54cf1fc`). Historical: at the time of the original recon, `BotState.from_risk` was called once at `main.py:385` and copied `risk.equity` + `dict(risk._state.open_positions)` (`api/state.py:243-279`); nothing in non-test code subsequently wrote `state.equity`, `state.day_start_equity`, `state.open_positions`, or `state.recent_fills`. Consequences for `/dashboard/snapshot`: `GlobalStats.pnlToday = snap.equity - snap.day_start_equity` was always `0.0`; `equity_history` grew daily but every point carried the same frozen equity and `pnl=0.0` (`utils/equity_curve.py:99-103` read frozen `state.equity`); `risk.maxDrawdown`/`sharpe`/`var95`/`exposurePct` (`api/routes_rest.py:_build_riskmetrics`, `:173-223`) degraded to `None` or zero on the flat series. Closed by (2a) (d079f93) for `state.recent_fills` and by (2b) (8ff2236) polling mirror for `state.equity`, `state.open_positions`, and `state.day_start_equity`. Five `GlobalStats` literal zero stubs at `api/routes_rest.py:247-251` (`pnlMonth`, `pnlAllTime`, `winRate`, `totalTrades`, `streak`) remain unfixed and NOT addressed by 2b — separate derived-stats pipeline scope.
 
-- **Documentation drift — "LIVE" telemetry framing** (flag only; do NOT fix in this entry — defer to a dedicated docs pass). The `v0.2.9 wave summary` in `CLAUDE.md` and the snapshot history wiring bullets above describe `risk` / `equity` / `monthlyPnl` as "LIVE production sources". This is true at the wiring level (the helpers exist and are invoked) but the chain bottoms out at a frozen `state.equity` per the bullet above, so the dashboard sees a flat series rather than real-time PnL. (Note: `fills` was originally in this drift list but as of d079f93 is now genuinely LIVE via `utils/fills.append_state_fill_record` — piece 2a. `api/schemas.py:586-594` and `api/schemas.py:577` describe the now-accurate state.) Correction for `risk` / `equity` / `monthlyPnl` deferred so this entry stays append-only.
+- **Documentation drift — "LIVE" telemetry framing** (RESOLVED for equity/risk/fills 2026-05-26 — see "Profitability epic — piece (2b)" Added entry below; the original drift framing is preserved here as historical context). The v0.2.9 wave summary in `CLAUDE.md` and the snapshot history wiring bullets above originally described `risk` / `equity` / `monthlyPnl` / `fills` as "LIVE production sources" while the chain bottomed out at a frozen `state.equity`. As of d079f93 (2a), `fills` is genuinely LIVE; as of 8ff2236 (2b), `equity` and `risk` are also genuinely LIVE. `monthlyPnl`'s wire path is unchanged from v0.2.9; its meaningful-output behavior is deferred to the derived-stats pipeline. The five `GlobalStats` zero stubs at `api/routes_rest.py:247-251` remain unfixed (separate scope).
 
 #### Tests
 
@@ -222,7 +222,10 @@ production fix.
 Fence-safe pair from the profitability-telemetry-gap recon
 (`.swarm-decisions.md` `profitability-telemetry-gap`, 2026-05-26).
 `risk_manager.py` is untouched. Piece (2b) — equity/positions BotState
-mirror — is fence-adjacent and DEFERRED to a separate locked task.
+mirror — was originally framed as fence-adjacent; the locked
+polling-loop variant turned out to be fence-safe (public accessors only)
+and LANDED 2026-05-26 at commit `8ff2236`, runtime-verified at `54cf1fc`.
+See "Profitability epic — piece (2b)" Added entry below.
 
 #### Added
 
@@ -293,17 +296,22 @@ mirror — is fence-adjacent and DEFERRED to a separate locked task.
 
 #### Out of scope
 
-- **Piece (2b) — equity / `open_positions` BotState mirror.**
-  Fence-adjacent (any option — risk-manager observer, caller-side
-  dual-write, polling loop, computed property — touches the
-  RiskManager state surface in some way). Separate locked task.
-  Until then, `state.equity` / `state.open_positions` remain the
-  one-time startup snapshot documented in [Unreleased] Known
-  issues "BotState is a one-time startup snapshot".
+- ~~**Piece (2b) — equity / `open_positions` BotState mirror.**~~
+  **LANDED 2026-05-26** at commit `8ff2236`, runtime-verified at
+  `54cf1fc`. Originally framed as fence-adjacent across four candidate
+  options (risk-manager observer, caller-side dual-write, polling
+  loop, computed property); the locked polling-loop variant (Option C)
+  turned out to be fence-safe because all required reads
+  (`risk.equity`, `risk.open_positions`, `risk.daily_pnl_snapshot().start_equity_usd`)
+  are PUBLIC accessors on RiskManager — no `risk._state` reads, no
+  `risk_manager.py` edits. See "Profitability epic — piece (2b)"
+  Added entry below for full details.
 - **Five `GlobalStats` zero stubs** at `api/routes_rest.py:247-251`
   (`pnlMonth`, `pnlAllTime`, `winRate`, `totalTrades`, `streak`).
-  Need a derived-stats pipeline that doesn't exist today. Not
-  addressable by pieces (1)+(2a) alone.
+  Need a derived-stats pipeline that doesn't exist today. NOT
+  addressable by pieces (1)+(2a)+(2b) — those wire the input data;
+  these five are separate-output aggregation (win/loss tracking,
+  monthly aggregation, streak counting).
 
 #### Noted (not fixed)
 
@@ -314,6 +322,74 @@ mirror — is fence-adjacent and DEFERRED to a separate locked task.
   `appendleft` correctly. `inject_position_handler` is a sim-mode-
   only debug endpoint; its ordering bug is latent and low-impact.
   Fix deferred to a separate one-line cleanup.
+
+### Profitability epic — piece (2b)
+
+Live BotState mirror via RiskManager polling. Closes the fence-adjacent
+deferral from the (1)+(2a) PR by using public accessors only — the
+locked design (Option C, polling loop) turned out to be fence-safe.
+
+#### Added
+
+- **`utils/risk_state_mirror.py`** — `mirror_risk_to_botstate(risk, state)`
+  long-lived coroutine that polls RiskManager every 5s and atomically
+  writes `state.equity`, `state.open_positions` (atomic dict REPLACE,
+  not delta-merge), and `state.day_start_equity` under
+  `state.write_lock`. Poll-first ordering — the first write happens
+  before the first `asyncio.sleep` so a freshly-restarted bot serves
+  live values from the next snapshot request. Reads use PUBLIC
+  ACCESSORS ONLY: `risk.equity` (property), `risk.open_positions`
+  (property — returns defensive copy), `risk.daily_pnl_snapshot().start_equity_usd`
+  (method). NO `risk._state` reads. Lifecycle / cancellation pattern
+  mirrors `utils.equity_curve.equity_snapshot_loop` exactly
+  (`asyncio.CancelledError` propagation, defensive outer try-except).
+  See `.swarm-decisions.md` `2b-polling-runtime`.
+- **`api/server.py`** — start `risk_mirror_task` alongside `equity_task`,
+  cancel-and-await in `finally`. Kwarg-only `risk` parameter on `run()`
+  defaults to `None`; tests that omit `risk` skip mirror-task creation,
+  preserving the pre-(2b) test signature.
+- **`main.py`** — pass `risk=risk` to `http_server_run`.
+
+#### Fixed
+
+- **`BotState.equity` / `open_positions` / `day_start_equity` are now LIVE**
+  (closes the relevant part of CHANGELOG [Unreleased] Known issues
+  "BotState is a one-time startup snapshot"). `/dashboard/snapshot` now
+  returns values polled within the last 5s rather than the frozen
+  `BotState.from_risk` startup copy. Derived fields that consume these:
+  `GlobalStats.portfolioValue`, `GlobalStats.pnlToday`, `risk.maxDrawdown`,
+  `risk.sharpe`, `risk.var95`, `risk.exposurePct`, and `positions[]` are
+  all now live (drawdown/sharpe/var95 are subject to the
+  equity_history accumulation gate — they need a multi-point series to
+  return non-degenerate values).
+
+#### Tests
+
+- `tests/test_risk_state_mirror.py` (8 tests) — `_mirror_once` and
+  `mirror_risk_to_botstate` direct unit coverage: equity mirrored;
+  day_start_equity pulled from `daily_pnl_snapshot().start_equity_usd`
+  (NOT `risk._state`); atomic position replace (not delta-merge);
+  fresh-dict not-shared-reference; write under `write_lock`; poll-first
+  ordering (write before first sleep); multi-cycle tracking;
+  cancellation handled cleanly. Test count: 392 → 400 passing.
+
+#### Runtime verification
+
+- Mirror task observed live on the droplet at commit `54cf1fc`. The 5s
+  poll cadence ticks unconditionally — no fill required to confirm
+  wiring (lighter close criterion than (1)/(2a)). Closes
+  `.swarm-decisions.md` `2b-polling-runtime` owed-gap row.
+
+#### Out of scope (still deferred, NOT addressed by 2b)
+
+- **Five `GlobalStats` zero stubs** at `api/routes_rest.py:247-251`
+  (`pnlMonth`, `pnlAllTime`, `winRate`, `totalTrades`, `streak`).
+  Need a separate derived-stats pipeline.
+- **`monthlyPnl`** — wire path unchanged from v0.2.9; output deferred
+  to the same derived-stats pipeline.
+- **(1)/(2a) runtime smoke** — pending per `.swarm-decisions.md`
+  `b1-fill-runtime-update` (no deterministic trigger for
+  `_exec_and_record`).
 
 ### Earlier in the [Unreleased] window — Phase E.1 (pre-v0.2.9 wave)
 
