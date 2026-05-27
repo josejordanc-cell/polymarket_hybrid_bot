@@ -115,7 +115,7 @@ def _get_ws_ticket_secret(config: Any) -> str | None:
 def verify_bearer(request_headers: Any, config: Any) -> bool:
     """
     Validate an ``Authorization: Bearer <token>`` header against
-    ``config.api.bot_api_token``.
+    ``config.http_api.bot_api_token``.
 
     Parameters
     ----------
@@ -125,7 +125,7 @@ def verify_bearer(request_headers: Any, config: Any) -> bool:
         case-sensitive header mapping that the HTTP handler passes in.
     config:
         The application config object.  Must expose
-        ``config.api.bot_api_token`` as a ``pydantic.SecretStr`` (or any
+        ``config.http_api.bot_api_token`` as a ``pydantic.SecretStr`` (or any
         object with ``.get_secret_value() -> str``).
 
     Returns
@@ -185,7 +185,7 @@ def verify_ws_ticket(token: str, config: Any) -> bool:
     - ``exp``  — expiry (validated automatically by PyJWT)
     - ``iat``  — issued-at (present; not verified beyond presence)
 
-    The secret is taken from ``config.api.ws_ticket_secret``.
+    The secret is taken from ``config.http_api.ws_ticket_secret``.
 
     Parameters
     ----------
@@ -193,7 +193,7 @@ def verify_ws_ticket(token: str, config: Any) -> bool:
         The raw JWT string received from the WebSocket upgrade request.
     config:
         The application config object.  Must expose
-        ``config.api.ws_ticket_secret`` as a ``pydantic.SecretStr``.
+        ``config.http_api.ws_ticket_secret`` as a ``pydantic.SecretStr``.
 
     Returns
     -------

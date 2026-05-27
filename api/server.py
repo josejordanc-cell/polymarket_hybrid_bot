@@ -51,7 +51,7 @@ async def run(
     Behavior:
       - Builds an ``aiohttp.web.Application``, delegates route registration
         to ``api.routes_rest.setup_routes(app, state, config)``.
-      - Reads ``config.api.bind_host`` and ``config.api.port`` via
+      - Reads ``config.http_api.bind_host`` and ``config.http_api.port`` via
         ``getattr`` with safe defaults (``"0.0.0.0"`` / ``8080``). Step 6
         wires the real nested ``HttpApiConfig`` model into BotConfig; until
         then the defaults let this module be imported and exercised stand-
