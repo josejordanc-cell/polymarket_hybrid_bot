@@ -71,7 +71,7 @@ observability contract. The naming collision is a known cleanup chore
    a smoke marker, not a real value.
 
 5. **Webhook policy:** in agent / test / CI environments, leave
-   `BOT_DISCORD_WEBHOOK_URL`, `BOT_TELEGRAM_BOT_TOKEN`, `BOT_TELEGRAM_CHAT_ID`
+   `BOT_DISCORD_WEBHOOK_URL`, `BOT_TELEGRAM_TOKEN`, `BOT_TELEGRAM_CHAT_ID`
    **unset**. Never use real webhooks in tests. Mocks only.
 
 6. **Image digest is pinned** (`Dockerfile`, v0.2.4). Never auto-bump in routine PRs.

@@ -9,7 +9,7 @@
 # ==0.26.0 are already in the lockfile — no dev/test extras to install.
 #
 # No env vars set by design. Per CLAUDE.md hard rule 5, the webhook vars
-# BOT_DISCORD_WEBHOOK_URL / BOT_TELEGRAM_BOT_TOKEN / BOT_TELEGRAM_CHAT_ID
+# BOT_DISCORD_WEBHOOK_URL / BOT_TELEGRAM_TOKEN / BOT_TELEGRAM_CHAT_ID
 # MUST stay unset in test/CI. BOT_MODE / BOT_EXPERIMENT_ID are defaulted
 # by tests/conftest.py:133-134 via os.environ.setdefault. The suite is
 # hermetic (BOT_DATA_DIR-writing tests monkeypatch to tmp_path).

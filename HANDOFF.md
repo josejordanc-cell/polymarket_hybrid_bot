@@ -126,7 +126,7 @@ re-cloned from scratch.
 
 ## Droplet state (2026-05-26)
 
-Droplet (157.230.63.174) currently runs branch swarm/team-b-phase-d @ 77b3ccd (tag v0.2.8), container image polymarket_hybrid_bot:0.2.4, healthy. Redeploy to main is PRODUCED but DEFERRED (not executed) as of 2026-05-26 — see DROPLET_REDEPLOY.md. Gated on the 1 GB→2 GB RAM decision.
+Droplet (157.230.63.174) runs `main` @ `2f8bcac` (container image `polymarket_hybrid_bot:0.2.4`, content rebuilt to image ID `4cff62dd`), healthy. The redeploy from `swarm/team-b-phase-d @ 77b3ccd` (tag `v0.2.8`) was EXECUTED per `DROPLET_REDEPLOY.md` — the prior "PRODUCED but DEFERRED (not executed)" framing is RESOLVED. Redeploy chain (per `.swarm-decisions.md`): `77b3ccd` → `b8095bc` (row `b1-fill-runtime-update`) → `54cf1fc` (image `5f415e1a`; row `2b-polling-runtime-closed`) → `2f8bcac` (image `4cff62dd`; per `docs/NEXT_STEPS.md:19`). The 1 GB→2 GB RAM decision noted in the prior framing is no longer gating — the redeploys above were executed on the existing droplet sizing.
 
 ## Agent discipline
 
