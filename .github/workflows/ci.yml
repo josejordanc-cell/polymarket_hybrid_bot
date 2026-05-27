@@ -1,0 +1,41 @@
+# Pytest-only CI gate — mirrors the local gauntlet exactly:
+#     .venv/bin/python -m pytest tests/ -q
+#
+# Python 3.11 per Dockerfile (digest-pinned python:3.11-slim-bookworm).
+# Install is a single `pip install -r requirements.txt` — requirements.txt
+# is hash-pinned (pip-compile --generate-hashes from requirements.in), so
+# pip auto-enforces hash-checking. Do NOT pass --upgrade; CLAUDE.md hard
+# rule 7 forbids routine eth-stack bumps. pytest==8.4.2 + pytest-asyncio
+# ==0.26.0 are already in the lockfile — no dev/test extras to install.
+#
+# No env vars set by design. Per CLAUDE.md hard rule 5, the webhook vars
+# BOT_DISCORD_WEBHOOK_URL / BOT_TELEGRAM_BOT_TOKEN / BOT_TELEGRAM_CHAT_ID
+# MUST stay unset in test/CI. BOT_MODE / BOT_EXPERIMENT_ID are defaulted
+# by tests/conftest.py:133-134 via os.environ.setdefault. The suite is
+# hermetic (BOT_DATA_DIR-writing tests monkeypatch to tmp_path).
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pytest
+        run: python -m pytest tests/ -q
