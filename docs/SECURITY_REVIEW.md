@@ -39,13 +39,13 @@ The repo's documentation is genuinely better than typical for a personal trading
 | 5 | HIGH | Equity reconciliation currently disabled (`BOT_POLYGON_RPC_URL` unset) — bot's PnL is not cross-checked against chain. Documentation treats this as benign; it isn't, for a live bot | `HANDOFF.md` | §3, §11 |
 | 6 | MEDIUM | Container missing standard hardening: `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, resource limits, dedicated network | `docker-compose.yml` | §7 |
 | 7 | MEDIUM | Base image not pinned by digest; `requirements.txt` not hash-pinned (acknowledged as v0.3.0 open question — make it a v0.2.x security backport instead) | `Dockerfile`, HANDOFF | §8 |
-| 8 | MEDIUM | Metrics endpoint binds `0.0.0.0` by design; safe today only because compose doesn't publish 9091. One stray `-p 9091:9091` exposes it. No auth on metrics | `.env.example`, `docker-compose.yml` | §5 |
+| 8 | MEDIUM (RESOLVED) | ~~Metrics endpoint binds `0.0.0.0` by design~~ — **FIXED** 2026-05-04 by T1 (PR #9, see §12.1.1 row 1). Prometheus exporter now hardcodes `addr="127.0.0.1"` at `observability/metrics_exporter.py:161` (with explicit `127.0.0.1`-only banner in the `start()` docstring at `:154`). A stray `-p 9091:9091` no longer exposes the endpoint — the socket only listens on loopback. The exec-summary row was simply never updated to mirror §12.1.1. The "no auth on metrics" tail still stands as guidance for any future external exposure (`BOT_METRICS_AUTH_TOKEN` env field is reserved in `.env.example:87` but not yet implemented). | `observability/metrics_exporter.py:154,161`, `.env.example`, `docker-compose.yml` | §5 |
 | 9 | MEDIUM | Telegram token, Discord webhook, Polygon RPC URL are documented as if they were configuration; they are secrets and should be labelled and handled as such | `.env.example` | §5 |
 | 10 | MEDIUM | `.env` inline-comment-after-value pattern (root cause of the v0.2.2 incident) survived in the deployed `.env`. **Mitigated 2026-05-04** on the droplet (14 → 0); same fix needs to land in `.env.example` so new deploys don't reintroduce it | `.env`, `.env.example` | §5 |
 | 11 | LOW (mitigated) | Bot persists market cache to `/app/.market_cache.json` (image-root path), not to a bind-mounted writable directory. Symptom: repeated `market_cache_write_failed` warnings on a non-root deploy. **Worked around 2026-05-04** by `chown bot:bot /app/` in the running container; durable fix is to move the cache file path to `/app/data/market_cache.json` in code **Mitigated 2026-05-04** by T10 (PR #14) — see §0.1.1. | code path | §4 |
 | 12 | LOW | No structured guidance on log redaction (private keys, wallet addresses, JWTs, signed messages) — trading bots routinely leak these by accident in stack traces | repo-wide | §11 |
 | 13 | LOW | No CI security checks documented (gitleaks, pip-audit, hadolint, trivy) | repo-wide | §11 |
-| 14 | LOW | No dashboard-integration auth model defined yet; the `BOT_METRICS_*` surface is the natural anchor for this and should be designed before any dashboard work begins | docs gap | §11 |
+| 14 | LOW (RESOLVED) | ~~No dashboard-integration auth model defined yet~~ — **SHIPPED** in v0.2.6+ HTTP API + v0.2.9 D.2 wave. `api/auth.py` implements `verify_bearer()` (REST `Authorization: Bearer <token>` per `api/auth.py:115`) and `verify_ws_ticket()` (WS HS256 JWT via `?ticket=<jwt>` per `api/auth.py:179,213`). Secrets land in `HttpApiConfig` at `config/settings.py:239` with env prefix **`BOT_HTTP_API_`** (real vars: `BOT_HTTP_API_BOT_API_TOKEN`, `BOT_HTTP_API_WS_TICKET_SECRET`, `BOT_HTTP_API_ENABLED`, `BOT_HTTP_API_BIND_HOST`, `BOT_HTTP_API_PORT`) — NOT `BOT_METRICS_*`. Endpoints gated: `GET /dashboard/snapshot`, `POST /api/strategies/config`, `POST /emergency-stop` (Bearer); `GET /ws` (HS256 JWT ticket, close `4001` on failure). Production hotfix `7c0e313` + `d39696a` realigned `config.api.*` → `config.http_api.*` after a 401 incident — be wary of the older `config.api.*` references that still appear in `docs/architecture/D.2.1-http-module.md` and a few source docstrings. | `api/auth.py`, `config/settings.py:239`, `README.md:15`, CHANGELOG `[Unreleased]` D.2.x | (resolved) |
 
 ---
 
@@ -582,7 +582,7 @@ BOT_POLYMARKET_API_PASSPHRASE=
 # --- Reference price feeds -------------------------------------------------
 
 # Spot symbols polled from Binance for reference pricing.
-# JSON-array string. Set DISABLE_BINANCE_FEED=1 to skip Binance entirely
+# JSON-array string. Set BOT_DISABLE_BINANCE_FEED=true to skip Binance entirely
 # (e.g. when running from a US/DO IP that gets HTTP 451 responses).
 BOT_BINANCE_SYMBOLS=["BTC/USDT","ETH/USDT","SOL/USDT"]
 
@@ -680,8 +680,8 @@ BOT_DISCORD_WEBHOOK_URL=
 
 # --- Feature flags ---------------------------------------------------------
 
-# Skip Binance (HTTP 451 from many US/DO regions). Set to 1 to disable.
-DISABLE_BINANCE_FEED=
+# Skip Binance (HTTP 451 from many US/DO regions). Set to true to disable.
+BOT_DISABLE_BINANCE_FEED=false
 
 # Suppress repeated WS 404 warnings from the Polymarket WS upgrade until
 # v0.3.0 ships a stable WS URL.
@@ -934,7 +934,9 @@ CMD ["python", "-m", "polymarket_hybrid_bot.main"]
 
 ## 9. `README.md` — UPDATED
 
-**Why:** add Security and Threat Model entry points, point to the live-mode checklist, replace the loose "v0.2.1 status" with a clearly-labeled stability matrix, and remove ambiguous status icons in favour of explicit pass/fail/known-issue language.
+> ⚠️ **STALE — DO NOT APPLY (2026-05-27 audit annotation).** The full-file replacement below is a v0.2.4-era proposal that was never shipped. The repo has since moved through the v0.2.6 (HTTP API), v0.2.8 (D.2 dashboard wiring), and v0.2.9 wave (Phase 3 wire-shape alignment + snapshot history wiring + derived-stats + Sharpe/Sortino) — multiple `## Status (v0.2.4)` rows below are no longer accurate (e.g. `Container hardens` / `Non-root deploy on host` state; the legacy `DISABLE_BINANCE_FEED=1` flag — real var is `BOT_DISABLE_BINANCE_FEED`; the `docs/THREAT_MODEL.md` reference points at a never-created file per §11). Applying this section verbatim would regress the current `README.md`. The section is retained as a historical record of the v2-audit recommendation; treat the current `README.md` as canonical. A fresh README-modernization pass would need to be scoped against `[Unreleased]` reality, not this proposal.
+
+**Why (original v2 audit framing, preserved):** add Security and Threat Model entry points, point to the live-mode checklist, replace the loose "v0.2.1 status" with a clearly-labeled stability matrix, and remove ambiguous status icons in favour of explicit pass/fail/known-issue language.
 
 `UPDATED:` full replacement:
 
@@ -953,7 +955,7 @@ Async Polymarket hybrid strategies (sim default): feeds → risk → priority st
 | Strategy loop | OK | Look for `strategy_loop_started` after boot |
 | REST (Polymarket / Gamma) | OK | Primary data path |
 | WebSocket (Polymarket CLOB) | DEGRADED | Upgrade handshake returns 404; bot falls back to REST polling. `SUPPRESS_WS_404_WARNINGS=1` quiets the noise |
-| Binance spot feed | BLOCKED in many regions | HTTP 451 from US / most DO POPs; set `DISABLE_BINANCE_FEED=1` and use EU/SG regions for ccxt live |
+| Binance spot feed | BLOCKED in many regions | HTTP 451 from US / most DO POPs; set `BOT_DISABLE_BINANCE_FEED=true` and use EU/SG regions for ccxt live |
 | Equity reconciliation | OFF until `BOT_POLYGON_RPC_URL` set | Hard live-mode gate |
 | Container hardens (read-only fs, dropped caps, no-new-privs) | ON | See `docker-compose.yml` |
 | Non-root deploy on host | TARGET STATE — see `DEPLOY_DO.md` migration steps | Hard live-mode gate |
@@ -1027,7 +1029,7 @@ are spelled out. **Never edit `.env` in an editor that auto-syncs to a cloud fol
 
 1. **Polymarket WebSocket 404** — REST polling fallback. Tracked for v0.3.0.
 2. **Binance 451** — Geo / compliance block. Use `fra1` / `sgp1` / `lon1`,
-   or `DISABLE_BINANCE_FEED=1`. Tracked for v0.3.0.
+   or `BOT_DISABLE_BINANCE_FEED=true`. Tracked for v0.3.0.
 
 ## Operations cheatsheet
 
@@ -1066,26 +1068,26 @@ are spelled out. **Never edit `.env` in an editor that auto-syncs to a cloud fol
 
 ## 10. Files I have not yet reviewed
 
-These were not fetched in this pass (rate limits / scope). Recommend reviewing them in a follow-up pass — many will need targeted edits but I cannot make them sight-unseen.
+> **Status update (2026-05-27):** several items in the table below have been REVIEWED and/or RESOLVED in subsequent rounds; the "Status" column annotates each. The original (v2) framing is preserved verbatim in the "Why review matters" column so the audit history reads intact. **Do not read this table as an open audit gap** — it's a mix of resolved, in-progress, and still-open items. Verify against §12.1 / §12.1.1 / `CHANGELOG.md [Unreleased]` / `.swarm-decisions.md` before treating any row as actionable.
 
-| File | Why review matters |
-|---|---|
-| `requirements.txt` | Verify version pinning, plan migration to `pip-compile --generate-hashes`, run `pip-audit` and triage findings |
-| `.dockerignore` | Confirm `.env`, `data/`, `logs/`, `.git`, `tests/`, `*.md` are excluded so secrets and noise don't enter the build context |
-| `Dockerfile` (line 32 area) | Confirm no curl-pipe-bash, no `ADD <url>`, no installer scripts (already looks clean from what I've seen) |
-| `deploy/rebuild.sh` | Confirm `set -euo pipefail`, no unsafe `eval`, no `curl \| bash`, idempotent failures |
-| `healthcheck.py` | Confirm it doesn't open a network port without auth, doesn't print env, fails closed |
-| `config/` (Pydantic settings module) | Confirm validators exist for hex addresses, URL fields, numeric ranges (so the v0.2.2 inline-comment failure mode becomes a hard boot error, not a silent disable) |
-| `execution/` (CLOB executor) | Confirm it uses `verify=True` on every HTTP client, has explicit timeouts, retries with backoff, validates CLOB responses against a pydantic schema, and never logs signed payloads |
-| `data_feeds/` | Same checks as execution/ |
-| `risk_manager.py` | Confirm hard limits cannot be silently bypassed (e.g. NaN bankroll → unbounded position size); confirm kill-switch state is durable across restarts (writes to `data/`, not in-memory only) |
-| `scripts/wallet_reconcile.py` | Confirm read-only path, never signs anything, never prints private keys |
-| `scripts/weekly_report.py` | Confirm it doesn't ingest user-supplied paths without validation |
-| `tests/` | Confirm no real keys / wallets in fixtures; ideally add tests for the input-validation boundaries above |
-| `TESTING.md`, `TESTING_CHECKLIST.md` | Align with the live-mode checklist; add explicit "test-key only, never live-key" rule |
-| `CHANGELOG.md` | Align with semver discipline; record base-image digest and dependency-audit summary per release |
-| `docs/` (entire folder) | Read and either fold into the new docs/ structure or update in place |
-| Inline code comments | A separate pass; flag any TODOs that mention secrets, security, or "fix me later" |
+| File | Why review matters | Status |
+|---|---|---|
+| `requirements.txt` | Verify version pinning, plan migration to `pip-compile --generate-hashes`, run `pip-audit` and triage findings | **DONE.** `requirements.txt` is generated from `requirements.in` via `pip-compile --allow-unsafe --generate-hashes` (verify the header at `requirements.txt:1-5`); pip auto-enforces hash-checking. See `HANDOFF.md:69` (root) for the canonical statement. `pip-audit` runs are operator-side cadence, not a code gate. |
+| `.dockerignore` | Confirm `.env`, `data/`, `logs/`, `.git`, `tests/`, `*.md` are excluded so secrets and noise don't enter the build context | Still owed (small targeted review). |
+| `Dockerfile` (line 32 area) | Confirm no curl-pipe-bash, no `ADD <url>`, no installer scripts (already looks clean from what I've seen) | Still owed (small targeted review). |
+| `deploy/rebuild.sh` | Confirm `set -euo pipefail`, no unsafe `eval`, no `curl \| bash`, idempotent failures | Still owed (small targeted review). |
+| `healthcheck.py` | Confirm it doesn't open a network port without auth, doesn't print env, fails closed | Partially addressed by T11 (PR #22) — `healthcheck.py` now uses spot-feed heartbeat instead of network ping; further surface review still owed. |
+| `config/` (Pydantic settings module) | Confirm validators exist for hex addresses, URL fields, numeric ranges (so the v0.2.2 inline-comment failure mode becomes a hard boot error, not a silent disable) | **DONE 2026-05-05** as T13 / item #13 in §12.1.1 (PR #26, commit `352f8d0`) — ten pydantic validators added to `config/settings.py` covering URL schemes, hex addresses, key/secret lengths, JSON-array shape, and experiment-id alphabet. |
+| `execution/` (CLOB executor) | Confirm it uses `verify=True` on every HTTP client, has explicit timeouts, retries with backoff, validates CLOB responses against a pydantic schema, and never logs signed payloads | Partially addressed by T12 (PR #24) — Polymarket credentials now `SecretStr` everywhere, auto-redact in `repr()` / `model_dump()` / structlog. Remaining items (verify=True, timeouts, response schema, signed-payload-log audit) still owed. |
+| `data_feeds/` | Same checks as execution/ | Same status as `execution/` above. |
+| `risk_manager.py` | Confirm hard limits cannot be silently bypassed (e.g. NaN bankroll → unbounded position size); confirm kill-switch state is durable across restarts (writes to `data/`, not in-memory only) | **PARTIALLY ADDRESSED.** Correlation-guard silent-no-op fixed 2026-05-08 as T14 (PR #28, commit `704ddcc`) — see §12.1.1 row 14 and the row in §0.1.1. `risk_manager.py` is the project's fenced authority surface per CLAUDE.md hard rule 2; line-level audit-trail is maintained in CLAUDE.md + `.swarm-decisions.md` (rows referencing `risk_manager.py:NN` are bounds-checked against the live file). NaN-bankroll and kill-switch-durability checks are still owed as a targeted review. |
+| `scripts/wallet_reconcile.py` | Confirm read-only path, never signs anything, never prints private keys | Indirectly covered by T12 (PR #24) — `wallet_reconcile_cli.py:80` now calls `.get_secret_value()` on `polygon_rpc_url`, ensuring the cleartext is never accidentally logged. Read-only-path / no-signing checks still owed. |
+| `scripts/weekly_report.py` | Confirm it doesn't ingest user-supplied paths without validation | **REVIEWED.** Wholesale rewrite at `554e2a8` (2026-05-02) replaced log-driven FIFO model with `trades.jsonl`-driven flat-aggregate. Current CLI accepts only `--weeks N` / `--format {md,json}` / `--stdout` / `-v` — no user-supplied paths exposed. Re-audited in the v0.2.9 wave (Sharpe/Sortino addition at `9f951e5`); side-effect-free-on-import preserved. |
+| `tests/` | Confirm no real keys / wallets in fixtures; ideally add tests for the input-validation boundaries above | **REVIEWED (clean).** `tests/fixtures/sample_trades.jsonl` and `sample_logs.jsonl` use placeholder market_ids (`m1`/`m2`) and zero-balance values; conftest sets `BOT_MODE=sim` / `BOT_EXPERIMENT_ID=test` via `os.environ.setdefault` (`tests/conftest.py:133-134`) and stubs `py_clob_client` for hermetic runs. Validator tests landed with T13 (PR #26). |
+| `TESTING.md`, `TESTING_CHECKLIST.md` | Align with the live-mode checklist; add explicit "test-key only, never live-key" rule | Stale-CLI sweep completed (commits `7bb3748`, `1bf18ec`) — current CLIs match real argparse. Explicit "test-key only" rule still owed as a separate edit. |
+| `CHANGELOG.md` | Align with semver discipline; record base-image digest and dependency-audit summary per release | **MAINTAINED.** `[Unreleased]` is actively updated per wave (v0.2.9 + derived-stats + Sharpe/Sortino + B.7/B.8/B.9 + 3a–3i + Phase E.1 entries verified in this audit cycle). Base-image-digest-per-release discipline is operator-side cadence. |
+| `docs/` (entire folder) | Read and either fold into the new docs/ structure or update in place | **PARTIALLY REVIEWED.** `docs/HANDOFF.md`, `docs/NEXT_STEPS.md`, `docs/VALIDATION_CHECKLIST.md`, `docs/FINAL_CODE_REVIEW.md`, `docs/architecture/D.2.1-http-module.md` audited and partially updated in the 2026-05-26 / 2026-05-27 drift sweeps. This file itself (`docs/SECURITY_REVIEW.md`) audited 2026-05-27. `docs/audit/d24-emit-site-audit.md` not yet audited. |
+| Inline code comments | A separate pass; flag any TODOs that mention secrets, security, or "fix me later" | Still owed. |
 
 ---
 
