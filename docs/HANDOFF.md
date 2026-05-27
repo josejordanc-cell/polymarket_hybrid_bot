@@ -125,14 +125,21 @@ Below: **`event` name** → **important fields** (non-exhaustive; extra fields m
 
 **`weekly_report.py` JSON (`--format json`) — top-level keys (not structlog events):**
 
+Sourced from `scripts/weekly_report.py:79-102` (`WeeklyReport` dataclass; emitted via `asdict()` at `:104-106`). All 11 keys always present in the JSON output.
+
 | Key | Type | Meaning |
 |-----|------|---------|
-| `arb_unmatched_pairs` | int | YES/NO leg pairs still in FIFO queue after scan (should be **0** when logs are complete) |
-| `arb_unmatched_completions` | int | `arb_bundle_balanced` / `arb_unwind` / `arb_unwind_skipped` events without a matched leg pair |
-| `sharpe` | number \| null | Annualised Sharpe ratio over the all-time `trades.jsonl` equity series (forward-filled daily; rf=0, sqrt(365)). `null` when fewer than 20 daily returns are available or volatility is zero. Added `9f951e5`. |
-| `sortino` | number \| null | Annualised Sortino ratio over the same series (MAR=0, sqrt(365); downside deviation is std of negative returns only). `null` when fewer than 20 daily returns, zero downside returns, or degenerate downside std. Added `9f951e5`. |
-
-Non-zero values trigger a warning line in Markdown output; use for validation item 14.
+| `week_start` | str (ISO date `YYYY-MM-DD`) | UTC start of the trailing-`--weeks N` window. |
+| `week_end` | str (ISO date `YYYY-MM-DD`) | UTC end of the window (= report-generation time). |
+| `trades_total` | int | Count of `trades.jsonl` rows whose `ts` falls inside the window. |
+| `trades_filled` | int | In-window rows with `status` in (`filled`, `fill`, `filled_partial`, `partial_fill`); also rows with no `status` that look like executions (have `side` / `size` / `price` / `market_id` / `token_id`). |
+| `trades_cancelled` | int | In-window rows with `status` in (`cancelled`, `canceled`, `cancel`). |
+| `realized_pnl_usdc` | float | **Flat sum** over in-window rows of the first-present field among `realized_pnl_usdc` / `realized_pnl` / `pnl_usdc` / `pnl`. No grouping, no bundle matching. |
+| `unrealized_pnl_usdc` | float | Flat sum over in-window rows of the first-present field among `unrealized_pnl_usdc` / `unrealized_pnl`. |
+| `fees_paid_usdc` | float | Flat sum over in-window rows of the first-present field among `fees_paid_usdc` / `fee_usdc` / `fee` / `fees_usd`. |
+| `sharpe` | number \| null | Annualised Sharpe ratio over the all-time `trades.jsonl` equity series (forward-filled daily; rf=0, sqrt(365)). `null` when fewer than 20 daily returns are available or volatility is zero. Added `9f951e5`. **Not windowed** — computed over the entire file, not the trailing `--weeks N` slice (the ≥20-day gate cannot be satisfied by a 7-day window). |
+| `sortino` | number \| null | Annualised Sortino ratio over the same series (MAR=0, sqrt(365); downside deviation is std of negative returns only). `null` when fewer than 20 daily returns, zero downside returns, or degenerate downside std. Added `9f951e5`. **Not windowed** (same rationale as `sharpe`). |
+| `notes` | list[str] | Human-readable explanatory notes — populated for "No trade log at ..." (file missing), "Trade log exists but no rows fell in the selected time window", or "Trade log is empty for this window". Empty list when the window produced rows. |
 
 ### 5b. Prometheus metric schema
 
@@ -248,7 +255,9 @@ python -m scripts.weekly_report --weeks 4 --format json --stdout
 python -m scripts.weekly_report --weeks 1 -v
 ```
 
-**Arb PnL model:** For `intra_arbitrage`, the report pairs YES/NO **`trade_result`** events by FIFO per market prefix, matches each pair to the next **`arb_bundle_balanced` / `arb_unwind` / `arb_unwind_skipped`** completion by **`bundle_id`**, and sets bundle PnL = **`leg_yes_pnl + leg_no_pnl + unwind_pnl`** (cashflow with fee model aligned to `POLYMARKET_FEE_PER_SIDE`). **`arb_unwind_skipped`** rows are **notes only** — **not** added to bundle PnL. Orphan legs and unmatched completions appear in JSON warning fields.
+**PnL model (v0.2.1+ — `554e2a8`):** The report computes **flat-aggregate** PnL by summing per-row `realized_pnl_usdc` / `unrealized_pnl_usdc` / `fees_paid_usdc` across in-window `trades.jsonl` rows (`scripts/weekly_report.py:191-216`). There is **no per-bundle FIFO leg-pairing** and **no `bundle_id` matching** in the weekly report; the v0.2.0 log-driven arb-bundle PnL model was retired in `554e2a8` (2026-05-02) along with the report rewrite from structlog logs to `BOT_DATA_DIR/trades.jsonl`.
+
+> **Per-bundle arb telemetry still exists at runtime — just not in the weekly report.** The bot continues to emit structlog events `arb_bundle_balanced` / `arb_unwind` / `arb_unwind_skipped` with `bundle_id` (`strategies/intra_arbitrage.py:63,87,102,118,167`) and the Prometheus counter `bot_arb_unwinds_total{outcome}` (`observability/metrics_exporter.py:138`). Grep structlog or query Prometheus for bundle-level audit; the offline aggregator was removed but the data stream is intact.
 
 ### `scripts/wallet_reconcile.py`
 
