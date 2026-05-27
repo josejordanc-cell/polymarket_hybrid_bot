@@ -78,7 +78,16 @@ def _status(obj: dict[str, Any]) -> str:
 
 @dataclass
 class WeeklyReport:
-    """Aggregated metrics for a trailing calendar window."""
+    """Aggregated metrics for a trailing calendar window.
+
+    Note on ``sharpe`` / ``sortino``: these are computed over the
+    ENTIRE on-disk ``trades.jsonl`` history (not the trailing window),
+    because the ≥20-daily-returns honesty gate cannot be satisfied by
+    a 7-day window. They are stability metrics, not window aggregates;
+    ``None`` indicates insufficient data (fewer than 20 daily returns,
+    or — for Sortino — no downside returns at all). See
+    ``utils/risk_metrics.compute_sharpe`` / ``compute_sortino``.
+    """
 
     week_start: str
     week_end: str
@@ -88,11 +97,23 @@ class WeeklyReport:
     realized_pnl_usdc: float = 0.0
     unrealized_pnl_usdc: float = 0.0
     fees_paid_usdc: float = 0.0
+    sharpe: float | None = None
+    sortino: float | None = None
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         return d
+
+    @staticmethod
+    def _fmt_optional(v: float | None, spec: str = ".4f") -> str:
+        """Render an Optional[float] metric for the markdown table.
+
+        ``None`` becomes ``"n/a (insufficient data)"`` — honest across
+        all three Sharpe/Sortino None causes (insufficient samples,
+        zero volatility, zero downside) without lying with ``"0.00"``.
+        """
+        return "n/a (insufficient data)" if v is None else format(v, spec)
 
     def to_markdown(self) -> str:
         lines = [
@@ -108,6 +129,8 @@ class WeeklyReport:
             f"| Realized PnL (USDC) | {self.realized_pnl_usdc:.4f} |",
             f"| Unrealized PnL (USDC) | {self.unrealized_pnl_usdc:.4f} |",
             f"| Fees paid (USDC) | {self.fees_paid_usdc:.4f} |",
+            f"| Sharpe (annualised, all-time) | {self._fmt_optional(self.sharpe)} |",
+            f"| Sortino (annualised, all-time) | {self._fmt_optional(self.sortino)} |",
             "",
         ]
         if self.notes:
@@ -199,6 +222,20 @@ def generate_report(
         )
     elif in_window == 0:
         report.notes.append("Trade log is empty for this window.")
+
+    # Sharpe / Sortino: computed over the ENTIRE trades.jsonl history
+    # (not the trailing window — a 7-day window cannot satisfy the
+    # ≥20-daily-returns gate enforced by utils/risk_metrics.compute_sharpe
+    # / compute_sortino). Returns None when gated; rendered as
+    # "n/a (insufficient data)" in markdown. Imports are function-local
+    # to preserve scripts/weekly_report.py's side-effect-free-on-import
+    # contract (module docstring line 5).
+    from utils.derived_stats import build_daily_equity_series_from_trades
+    from utils.risk_metrics import compute_sharpe, compute_sortino
+
+    series = build_daily_equity_series_from_trades(path=log_path)
+    report.sharpe = compute_sharpe(series)
+    report.sortino = compute_sortino(series)
 
     return report
 

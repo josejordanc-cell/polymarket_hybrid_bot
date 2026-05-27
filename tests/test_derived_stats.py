@@ -18,12 +18,15 @@ import pytest
 from api.schemas import EquityPoint
 from utils.derived_stats import (
     _iter_jsonl_records,
+    _parse_trade_ts,
+    build_daily_equity_series_from_trades,
     compute_pnl_all_time,
     compute_pnl_month,
     compute_streak,
     compute_win_rate,
     count_total_trades,
 )
+from utils.risk_metrics import compute_sharpe, compute_sortino
 from utils.types import utc_now
 
 
@@ -458,3 +461,192 @@ def test_streak_uses_bot_data_dir_env(
         ],
     )
     assert compute_streak() == 2
+
+
+# ---------------------------------------------------------------------------
+# build_daily_equity_series_from_trades — offline weekly-report consumer.
+# Covers per-day bucketing (last equity_after wins), forward-fill across
+# gap days, defensive skips (cancelled / missing equity_after / malformed
+# ts), and end-to-end gating into compute_sharpe / compute_sortino.
+# ---------------------------------------------------------------------------
+
+
+def _trade_row(
+    ts: str,
+    equity_after: float | None,
+    status: str = "filled",
+) -> dict:
+    row: dict = {"ts": ts, "status": status, "market_id": "0xm"}
+    if equity_after is not None:
+        row["equity_after"] = equity_after
+    return row
+
+
+def test_build_series_missing_file_returns_empty(tmp_path: Path) -> None:
+    assert build_daily_equity_series_from_trades(path=tmp_path / "absent.jsonl") == []
+
+
+def test_build_series_empty_file_returns_empty(tmp_path: Path) -> None:
+    out = tmp_path / "trades.jsonl"
+    out.write_text("", encoding="utf-8")
+    assert build_daily_equity_series_from_trades(path=out) == []
+
+
+def test_build_series_last_equity_per_day(tmp_path: Path) -> None:
+    """Multiple fills on the same UTC day → last equity_after wins."""
+    out = tmp_path / "trades.jsonl"
+    _write_jsonl(
+        out,
+        [
+            _trade_row("2026-05-01T09:00:00Z", 10000.0),
+            _trade_row("2026-05-01T12:00:00Z", 10050.0),
+            _trade_row("2026-05-01T18:00:00Z", 10075.0),  # last on day 1
+            _trade_row("2026-05-02T10:00:00Z", 10100.0),
+        ],
+    )
+    series = build_daily_equity_series_from_trades(path=out)
+    assert len(series) == 2
+    assert series[0].day == "2026-05-01"
+    assert series[0].equity == 10075.0  # last write wins
+    assert series[1].day == "2026-05-02"
+    assert series[1].equity == 10100.0
+
+
+def test_build_series_forward_fill_across_gap_yields_zero_return(tmp_path: Path) -> None:
+    """Day 1 fill, day 3 fill, no day 2 fill → series has 3 points
+    (day 1, day 2 = day 1's equity by forward-fill, day 3). The
+    implied return on day 2 is therefore 0.0."""
+    out = tmp_path / "trades.jsonl"
+    _write_jsonl(
+        out,
+        [
+            _trade_row("2026-05-01T10:00:00Z", 10000.0),
+            _trade_row("2026-05-03T10:00:00Z", 10200.0),
+        ],
+    )
+    series = build_daily_equity_series_from_trades(path=out)
+    assert [pt.day for pt in series] == ["2026-05-01", "2026-05-02", "2026-05-03"]
+    assert [pt.equity for pt in series] == [10000.0, 10000.0, 10200.0]
+    # Implied returns: day 2 = (10000-10000)/10000 = 0.0, day 3 = 0.02
+    equities = [pt.equity for pt in series]
+    day2_return = (equities[1] - equities[0]) / equities[0]
+    assert day2_return == 0.0
+
+
+def test_build_series_skips_non_filled_status(tmp_path: Path) -> None:
+    """Cancelled / rejected / missing-status rows must not contribute."""
+    out = tmp_path / "trades.jsonl"
+    _write_jsonl(
+        out,
+        [
+            _trade_row("2026-05-01T10:00:00Z", 10000.0, status="filled"),
+            _trade_row("2026-05-02T10:00:00Z", 99999.0, status="cancelled"),
+            _trade_row("2026-05-03T10:00:00Z", 88888.0, status="rejected"),
+        ],
+    )
+    series = build_daily_equity_series_from_trades(path=out)
+    assert len(series) == 1
+    assert series[0].equity == 10000.0
+
+
+def test_build_series_skips_rows_without_equity_after(tmp_path: Path) -> None:
+    """Defensive: rows missing equity_after (e.g. legacy or partial
+    writes) are skipped, not crashed on."""
+    out = tmp_path / "trades.jsonl"
+    _write_jsonl(
+        out,
+        [
+            _trade_row("2026-05-01T10:00:00Z", None),  # missing
+            _trade_row("2026-05-02T10:00:00Z", 10100.0),
+        ],
+    )
+    series = build_daily_equity_series_from_trades(path=out)
+    assert len(series) == 1
+    assert series[0].day == "2026-05-02"
+    assert series[0].equity == 10100.0
+
+
+def test_build_series_skips_malformed_ts(tmp_path: Path) -> None:
+    out = tmp_path / "trades.jsonl"
+    _write_jsonl(
+        out,
+        [
+            _trade_row("not-a-date", 99999.0),
+            _trade_row("2026-05-01T10:00:00Z", 10000.0),
+        ],
+    )
+    series = build_daily_equity_series_from_trades(path=out)
+    assert len(series) == 1
+    assert series[0].equity == 10000.0
+
+
+def test_build_series_uses_bot_data_dir_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No explicit path → resolves BOT_DATA_DIR/trades.jsonl fresh."""
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    out = tmp_path / "trades.jsonl"
+    _write_jsonl(out, [_trade_row("2026-05-01T10:00:00Z", 10000.0)])
+    series = build_daily_equity_series_from_trades()
+    assert len(series) == 1
+
+
+def test_build_series_accepts_offset_iso_ts(tmp_path: Path) -> None:
+    """``+00:00`` offset form (as in tests/fixtures/sample_trades.jsonl)
+    parses identically to the ``Z`` suffix form."""
+    out = tmp_path / "trades.jsonl"
+    _write_jsonl(
+        out,
+        [
+            _trade_row("2026-05-01T10:00:00+00:00", 10000.0),
+            _trade_row("2026-05-02T10:00:00+00:00", 10100.0),
+        ],
+    )
+    series = build_daily_equity_series_from_trades(path=out)
+    assert [pt.day for pt in series] == ["2026-05-01", "2026-05-02"]
+
+
+def test_build_series_under_20_days_gates_sharpe_sortino_to_none(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: <20 daily returns → compute_sharpe / compute_sortino
+    BOTH return None (the locked ≥20 honesty gate fires on real
+    weekly-report-shaped input)."""
+    out = tmp_path / "trades.jsonl"
+    # 10 sequential days of fills → 10 points → 9 returns → both gate.
+    rows = []
+    eq = 10000.0
+    for i in range(1, 11):
+        eq *= 1.005
+        rows.append(_trade_row(f"2026-05-{i:02d}T10:00:00Z", eq))
+    _write_jsonl(out, rows)
+    series = build_daily_equity_series_from_trades(path=out)
+    assert len(series) == 10
+    assert compute_sharpe(series) is None
+    assert compute_sortino(series) is None
+
+
+def test_build_series_20plus_days_lets_sharpe_compute(tmp_path: Path) -> None:
+    """Positive control to the gating test: with ≥21 points (=20 daily
+    returns), Sharpe returns a finite number on non-zero-vol input."""
+    out = tmp_path / "trades.jsonl"
+    rows = []
+    eq = 10000.0
+    # Alternate gain/loss to guarantee non-zero std.
+    multipliers = [1.01 if i % 2 == 0 else 0.995 for i in range(21)]
+    for i, m in enumerate(multipliers, start=1):
+        eq *= m
+        rows.append(_trade_row(f"2026-05-{i:02d}T10:00:00Z", eq))
+    _write_jsonl(out, rows)
+    series = build_daily_equity_series_from_trades(path=out)
+    assert len(series) == 21
+    sharpe = compute_sharpe(series)
+    assert sharpe is not None
+
+
+def test_parse_trade_ts_handles_both_formats() -> None:
+    assert _parse_trade_ts("2026-05-01T10:00:00.123Z") is not None
+    assert _parse_trade_ts("2026-05-01T10:00:00+00:00") is not None
+    assert _parse_trade_ts("not-a-date") is None
+    assert _parse_trade_ts(None) is None
+    assert _parse_trade_ts(12345) is None

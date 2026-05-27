@@ -49,8 +49,9 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence
 
 import structlog
 
@@ -302,3 +303,96 @@ def compute_streak(path: Optional[Path] = None) -> int:
             break
         count += 1
     return sign * count
+
+
+# ---------------------------------------------------------------------------
+# Daily equity series (trades.jsonl-derived) — offline weekly-report consumer
+# ---------------------------------------------------------------------------
+
+
+def _parse_trade_ts(raw: Any) -> Optional[datetime]:
+    """Parse a ``trades.jsonl`` ``ts`` field to a UTC ``datetime``.
+
+    Tolerant of both ``utils.trades.persist_fill``'s native format
+    (``"YYYY-MM-DDTHH:MM:SS.mmmZ"``) and the ``+00:00`` offset form used
+    in test fixtures. Returns ``None`` for non-string / unparseable
+    input. Naïve datetimes are treated as UTC (no clock-zone guessing).
+    """
+    if not isinstance(raw, str):
+        return None
+    stripped = raw.strip()
+    if stripped.endswith("Z"):
+        stripped = stripped[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(stripped)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def build_daily_equity_series_from_trades(
+    path: Optional[Path] = None,
+) -> list["EquityPoint"]:
+    """Build a forward-filled daily equity series from ``trades.jsonl``.
+
+    For each UTC calendar day with ≥1 ``status=="filled"`` row, take the
+    LAST ``equity_after`` value in chronological file order. Forward-fill
+    flat across calendar gaps between the first and last observed day so
+    a no-fill day carries the prior day's equity (yielding a 0.0 return
+    on the gap day).
+
+    Consumed by ``scripts.weekly_report`` for Sharpe / Sortino — the
+    cron-driven weekly-report process has no access to the bot's
+    in-memory ``BotState.equity_history`` and must reconstruct an equity
+    series from disk. The snapshot path
+    (``api/routes_rest._build_riskmetrics``) reads ``BotState.equity_history``
+    directly and does NOT call this helper; the two equity-series
+    sources are independent by design.
+
+    Returns ``EquityPoint`` instances with ``pnl=0.0`` (placeholder —
+    Sharpe / Sortino only read ``.equity``; ``pnl`` is required by the
+    Pydantic shape).
+
+    Returns an empty list when:
+      - ``trades.jsonl`` is missing or empty;
+      - no rows are parseable (need ``status=="filled"``, parseable
+        ``ts``, numeric ``equity_after``).
+
+    No caching — file is read on demand. Cost is linear in file size;
+    matches the cost discipline of ``count_total_trades`` (PR1).
+    """
+    from api.schemas import EquityPoint
+
+    target = path if path is not None else _resolve_trades_path()
+    per_day: dict[date, float] = {}
+    for record in _iter_jsonl_records(target):
+        if record.get("status") != "filled":
+            continue
+        ts = _parse_trade_ts(record.get("ts"))
+        if ts is None:
+            continue
+        eq_raw = record.get("equity_after")
+        if eq_raw is None:
+            continue
+        try:
+            eq = float(eq_raw)
+        except (TypeError, ValueError):
+            continue
+        per_day[ts.date()] = eq  # last write wins (file is chronological)
+
+    if not per_day:
+        return []
+
+    days = sorted(per_day.keys())
+    first_day, last_day = days[0], days[-1]
+    series: list[EquityPoint] = []
+    current_eq: float = per_day[first_day]
+    d = first_day
+    while d <= last_day:
+        if d in per_day:
+            current_eq = per_day[d]
+        series.append(EquityPoint(day=d.isoformat(), equity=current_eq, pnl=0.0))
+        d = d + timedelta(days=1)
+    return series

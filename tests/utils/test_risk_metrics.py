@@ -20,6 +20,7 @@ from utils.risk_metrics import (
     compute_liquidation_risk,
     compute_max_drawdown,
     compute_sharpe,
+    compute_sortino,
     compute_var95_usd,
 )
 from utils.types import Position
@@ -116,6 +117,58 @@ class TestComputeSharpe:
 
     def test_empty_returns_none(self) -> None:
         assert compute_sharpe([]) is None
+
+
+# ---------------------------------------------------------------------------
+# TestComputeSortino — mirrors TestComputeSharpe locks 3–5
+# (≥20 returns, sqrt(365) annualization, MAR=rf=0). Downside-deviation
+# denominator is std of NEGATIVE returns only.
+# ---------------------------------------------------------------------------
+
+
+class TestComputeSortino:
+    def _make_history(self, returns: list[float], start: float = 10000.0) -> list[EquityPoint]:
+        """Build an equity_history from a sequence of returns."""
+        equities = [start]
+        for r in returns:
+            equities.append(equities[-1] * (1.0 + r))
+        return [_ep(f"2026-05-{i+1:02d}", e) for i, e in enumerate(equities)]
+
+    def test_mixed_returns_happy_path(self) -> None:
+        """20 returns with a mix of pos/neg → finite Sortino."""
+        rets = [0.01, -0.005, 0.02, -0.01, 0.015, -0.008, 0.012] * 3  # 21 returns
+        history = self._make_history(rets[:20])
+        sortino = compute_sortino(history)
+        assert sortino is not None
+        assert np.isfinite(sortino)
+
+    def test_mixed_returns_annualization_factor(self) -> None:
+        """Manually compute Sortino for a known sequence and verify
+        annualization with sqrt(365) (lock 4) and MAR=0 (lock 5)."""
+        rets = [0.01, -0.005, 0.02, -0.01, 0.015, -0.008, 0.012] * 3  # 21 returns
+        history = self._make_history(rets[:20])
+        sortino = compute_sortino(history)
+        assert sortino is not None
+        equities = np.array([pt.equity for pt in history], dtype=float)
+        manual_rets = np.diff(equities) / equities[:-1]
+        downside = manual_rets[manual_rets < 0.0]
+        expected = float(manual_rets.mean() / downside.std(ddof=0) * np.sqrt(365.0))
+        assert sortino == pytest.approx(expected)
+
+    def test_all_positive_returns_zero_downside_returns_none(self) -> None:
+        """No downside returns → Sortino denominator undefined → None
+        (per spec: do not divide by zero, do not return inf)."""
+        history = self._make_history([0.01] * 20)
+        assert compute_sortino(history) is None
+
+    def test_19_returns_insufficient(self) -> None:
+        """Need ≥20 daily returns per lock 3; 19 returns → None."""
+        history = self._make_history([0.01, -0.005] * 10)  # 20 returns
+        # Drop one to make it 19 returns (20 points).
+        assert compute_sortino(history[:-1]) is None
+
+    def test_empty_returns_none(self) -> None:
+        assert compute_sortino([]) is None
 
 
 # ---------------------------------------------------------------------------

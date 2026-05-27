@@ -94,6 +94,46 @@ def compute_sharpe(
     return float(returns.mean() / std * np.sqrt(365.0))  # lock 4
 
 
+def compute_sortino(
+    equity_history: Sequence[EquityPoint],
+) -> Optional[float]:
+    """Annualised Sortino ratio from daily equity returns (mirrors locks 3–5).
+
+    Daily returns = ``(equity[i] - equity[i-1]) / equity[i-1]``.
+    Sortino = ``mean(returns) / downside_std * sqrt(365)`` where
+    ``downside_std = std(returns[returns < 0], ddof=0)`` — the standard
+    deviation of NEGATIVE returns only (MAR = 0, identical to lock 5's
+    risk-free rate = 0). Annualisation factor sqrt(365) (lock 4 —
+    24/7 crypto). Minimum 20 daily returns (lock 3 — equivalent to
+    ``len(history) < 21``).
+
+    Returns ``None`` when:
+      - fewer than 20 daily returns are available (lock 3 gate);
+      - there are zero downside returns (Sortino undefined — no
+        downside-deviation denominator; would otherwise be 0 / 0 or inf);
+      - ``downside_std == 0.0`` (degenerate; e.g. exactly one downside
+        return — ``std`` with ``ddof=0`` of a single value is 0). Mirrors
+        ``compute_sharpe``'s zero-std guard.
+    """
+    if len(equity_history) < 21:  # need ≥20 returns → ≥21 points (lock 3)
+        return None
+
+    equities = np.array([pt.equity for pt in equity_history], dtype=float)
+    returns = np.diff(equities) / equities[:-1]
+    returns = returns[np.isfinite(returns)]
+    if len(returns) < 20:
+        return None
+
+    downside = returns[returns < 0.0]
+    if len(downside) == 0:
+        return None  # zero downside returns: Sortino undefined
+
+    downside_std = downside.std(ddof=0)
+    if downside_std == 0.0:
+        return None  # single downside (or degenerate); avoid div-by-zero
+    return float(returns.mean() / downside_std * np.sqrt(365.0))  # lock 4
+
+
 def compute_var95_usd(
     equity_history: Sequence[EquityPoint],
     current_equity: float,
