@@ -66,7 +66,7 @@ First-time on a fresh host: `cp .env.example .env`, fill secrets, `chmod 600 .en
 
 1. **WebSocket migration** — When Polymarket ships a stable WS URL, re-enable and drop REST-only hot paths where safe.
 2. **Reference price diversification** — Reduce reliance on Binance when `DISABLE_BINANCE_FEED=1` (midpoint-only / multi-venue).
-3. **Hash-pinning** — Consider `pip hash` / lockfile for fully reproducible CI once the 7.x stack stabilizes.
+3. **Hash-pinning** — DONE. `requirements.txt` is generated from `requirements.in` by `pip-compile --allow-unsafe --generate-hashes` (the resulting lockfile is hash-pinned, and `pip install -r requirements.txt` auto-enforces hash-checking). Edit pins in `requirements.in` and regenerate; never edit `requirements.txt` by hand.
 
 ## Open issues for v0.2.3 (observed in v0.2.2 running container)
 
