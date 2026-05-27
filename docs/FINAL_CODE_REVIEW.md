@@ -118,7 +118,7 @@ Senior-engineer review of the Polymarket hybrid bot after Prompts 1–9. This do
 ## P3 BACKLOG (deferred)
 
 - Trade ledger DB (replace JSON scraping for weekly report).
-- Sharpe / Sortino in weekly report.
+- Sharpe / Sortino in weekly report. **DONE** 2026-05-26 — commit `9f951e5` (see `CHANGELOG.md` [Unreleased] "Weekly report — Sharpe + Sortino"; `.swarm-decisions.md` `sharpe-sortino-weekly-report`).
 - Polygon contract listener for sub-minute settlement.
 - pUSD balance integration in `wallet_reconcile`.
 - `pending_orders` persistence.

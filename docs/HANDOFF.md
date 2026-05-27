@@ -129,6 +129,8 @@ Below: **`event` name** → **important fields** (non-exhaustive; extra fields m
 |-----|------|---------|
 | `arb_unmatched_pairs` | int | YES/NO leg pairs still in FIFO queue after scan (should be **0** when logs are complete) |
 | `arb_unmatched_completions` | int | `arb_bundle_balanced` / `arb_unwind` / `arb_unwind_skipped` events without a matched leg pair |
+| `sharpe` | number \| null | Annualised Sharpe ratio over the all-time `trades.jsonl` equity series (forward-filled daily; rf=0, sqrt(365)). `null` when fewer than 20 daily returns are available or volatility is zero. Added `9f951e5`. |
+| `sortino` | number \| null | Annualised Sortino ratio over the same series (MAR=0, sqrt(365); downside deviation is std of negative returns only). `null` when fewer than 20 daily returns, zero downside returns, or degenerate downside std. Added `9f951e5`. |
 
 Non-zero values trigger a warning line in Markdown output; use for validation item 14.
 
@@ -349,13 +351,13 @@ Exit **0** = within threshold; **1** = breach; **2** = error.
 - **pUSD / collateral** not in USDC RPC balance → drift alerts can fire during normal Polymarket flows; treat drift as **directional signal**, not absolute truth.
 - **Python 3.10+** required (`slots` on dataclasses); Docker uses **3.11**.
 - **`pending_orders`**: lost on restart; possible duplicate or stuck order handling needs ops playbooks.
-- **Weekly drawdown** in `weekly_report` is from `fill_recorded.equity` samples only — not a full mark-to-market equity curve.
+- **Weekly drawdown / Sharpe / Sortino** in `weekly_report` derive from `trades.jsonl` `equity_after` samples (written per-fill by `utils.trades.persist_fill` since `d079f93`) — Sharpe/Sortino consume a forward-filled daily series via `utils.derived_stats.build_daily_equity_series_from_trades` (since `9f951e5`). Still not a full mark-to-market equity curve: gap days carry the prior fill's equity (0.0 return on gap days), and intra-day mark-to-market is not captured.
 
 ---
 
 ## 11. Roadmap
 
-- Trade ledger DB; Sharpe/Sortino in weekly report; Polygon settlement listener; pUSD in reconcile; persistent pending orders. See `docs/FINAL_CODE_REVIEW.md` P3 backlog.
+- Trade ledger DB; Polygon settlement listener; pUSD in reconcile; persistent pending orders. See `docs/FINAL_CODE_REVIEW.md` P3 backlog. (Sharpe/Sortino in weekly report DONE 2026-05-26 at `9f951e5` — see `CHANGELOG.md` [Unreleased] "Weekly report — Sharpe + Sortino".)
 
 ---
 

@@ -527,6 +527,105 @@ Fully fence-safe across both PRs — `risk_manager.py` untouched.
   in place but their output values remain at cold-start (`0.0` / `0`)
   until the two passive observations above land naturally.
 
+### Weekly report — Sharpe + Sortino
+
+Closes the long-standing `docs/NEXT_STEPS.md:102` / `docs/FINAL_CODE_REVIEW.md:121`
+P3 backlog item. The weekly report (`scripts/weekly_report.py`, run via
+cron) now emits annualised Sharpe and Sortino ratios alongside the
+trade-aggregate counters. The cron process has no access to the bot's
+in-memory `BotState.equity_history`, so the report reconstructs a daily
+equity series from disk via `trades.jsonl`. Fence-safe: `risk_manager.py`
+untouched, `settlements.py` untouched, snapshot path untouched. See
+`.swarm-decisions.md` `sharpe-sortino-weekly-report` (commit `e217907`)
+for the locked-decisions trail.
+
+#### Added
+
+- **`utils.risk_metrics.compute_sortino(equity_history)`** (commit
+  `9f951e5`) — annualised Sortino ratio mirroring `compute_sharpe`'s
+  locks 3–5 exactly: rf = MAR = 0 (lock 5), annualisation `sqrt(365)`
+  (lock 4), minimum 20 daily returns else `None` (lock 3). Downside
+  deviation is `std` of NEGATIVE returns only (`returns[returns < 0]`,
+  `ddof=0`). Returns `None` when there are zero downside returns
+  (denominator undefined — no div-by-zero, no `inf`) and when
+  `downside_std == 0.0` (degenerate, e.g. exactly one downside
+  return). `compute_sharpe` is unchanged.
+- **`utils.derived_stats.build_daily_equity_series_from_trades(path=None)`**
+  (commit `9f951e5`) — reconstructs an `EquityPoint` series from
+  `BOT_DATA_DIR/trades.jsonl`. For each UTC calendar day with ≥1
+  `status=="filled"` row, takes the LAST `equity_after` in chronological
+  file order; **forward-fills flat** across calendar gaps between the
+  first and last observed day (a no-fill day carries the prior day's
+  equity, yielding a 0.0 return on that day). Returns
+  `EquityPoint(day, equity, pnl=0.0)` instances — `pnl` is a placeholder
+  since Sharpe / Sortino only read `.equity`. Reuses the PR1
+  `_iter_jsonl_records` reader and `_resolve_trades_path` resolver — no
+  new readers, no new path resolvers. Companion
+  `_parse_trade_ts` accepts both `persist_fill`'s native `Z` suffix
+  and the `+00:00` offset form used in test fixtures.
+- **`WeeklyReport.sharpe` / `.sortino` fields** (commit `9f951e5`) —
+  added to `scripts/weekly_report.py`'s `WeeklyReport` dataclass as
+  `float | None = None`. JSON output auto-includes them via
+  `asdict()` (no extra plumbing). Markdown output gains two new rows
+  after the fees line, labelled "Sharpe (annualised, all-time)" and
+  "Sortino (annualised, all-time)". A `_fmt_optional` static helper
+  renders `None` as `"n/a (insufficient data)"` — honest across all
+  three `None` causes (insufficient samples, zero volatility, zero
+  downside) without lying with `"0.00"`.
+
+#### Locked decisions
+
+- **All-time scope, not windowed.** Sharpe / Sortino are computed
+  over the ENTIRE on-disk `trades.jsonl` history, not the trailing
+  `--weeks` window. A 7-day window cannot satisfy the ≥20-daily-returns
+  honesty gate, so a windowed metric would be permanently `None`.
+  Markdown labels say "annualised, all-time" to surface the scope
+  honestly; the dataclass docstring documents the rationale.
+- **Forward-fill flat across gap days.** A day with no fill carries
+  the prior day's equity → 0.0 return on the gap day. This avoids
+  index-skip bias (treating a 5-day gap as a 1-day return) and is
+  honest about the bot's actual observed equity on quiet days.
+- **≥20-daily-returns honesty gate.** Mirrors `compute_sharpe`'s
+  lock 3 exactly; applies to Sortino identically. Below the gate,
+  both ratios return `None` and the markdown renders "n/a
+  (insufficient data)".
+- **No `cfg.*` surface added.** All thresholds (`sqrt(365)`, rf=0,
+  MAR=0, 20-return minimum) remain hardcoded literals matching
+  `compute_sharpe`'s style. Tuning these is a separate (deferred)
+  scope.
+
+#### Helper home
+
+- The new series-builder lives in `utils/derived_stats.py` rather
+  than `scripts/weekly_report.py` or a new module. Rationale: that
+  module already owns `_iter_jsonl_records` + `_resolve_trades_path`
+  + the `trades.jsonl` reader surface (PR1 / PR2); placing the
+  series-builder there reuses both helpers, minimises new module
+  surface, and keeps the test coverage in
+  `tests/test_derived_stats.py` alongside related helpers. The
+  module docstring's "snapshot-build-time" framing is preserved by
+  documenting the new helper as an **offline** consumer for
+  `scripts.weekly_report`; the dashboard snapshot path
+  (`api/routes_rest._build_riskmetrics`) reads `BotState.equity_history`
+  directly and does NOT call this helper. The two equity-series
+  sources remain independent by design.
+
+#### Tests
+
+- Test count: **447 → 464** (+17 new, all pass; suite still hermetic).
+  - `tests/utils/test_risk_metrics.py::TestComputeSortino` (5 tests) —
+    mirrors `TestComputeSharpe` structure: happy-path 20 mixed
+    returns, hand-recomputed annualisation factor, all-positive →
+    `None` (zero downside), 19-returns insufficient (lock 3 gate),
+    empty input → `None`.
+  - `tests/test_derived_stats.py` (12 new tests) — series-builder
+    coverage: per-day last-equity-after bucketing, forward-fill
+    across gap yields a 0.0 return, status filter (`filled` only),
+    missing `equity_after` skip, malformed-`ts` skip, `BOT_DATA_DIR`
+    env resolution, `+00:00` offset form, end-to-end <20-day
+    gating of both `compute_sharpe` and `compute_sortino`,
+    ≥21-day positive control, `_parse_trade_ts` format coverage.
+
 ### Earlier in the [Unreleased] window — Phase E.1 (pre-v0.2.9 wave)
 
 Strategy-id translation at the FILL wire boundary and BotState

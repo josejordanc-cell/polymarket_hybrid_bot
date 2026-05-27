@@ -15,7 +15,7 @@ Rough effort and dependencies. Dates relative to **2026-05-02**.
 > `pnlMonth` / `pnlAllTime` / `totalTrades`; PR2 (`9e26fae`) wired
 > `winRate` (0–100 percentage) and `streak` (signed) via a new
 > settlement-persistence pipeline (`utils/settlements.py`) and made the
-> suite hermetic at 447 passing. **GlobalStats epic COMPLETE.** Droplet
+> suite hermetic at 464 passing. **GlobalStats epic COMPLETE.** Droplet
 > redeployed to `2f8bcac` (image `4cff62dd`). Two PASSIVE owed-gaps
 > remain (no action required): (a) `b1-fill` runtime obs — await a
 > natural sim fill to populate `trades.jsonl` → `totalTrades` /
@@ -99,6 +99,6 @@ remains accurate.
 | **pending_orders persistence** | Medium | If restarts during live cause pain |
 | **Polygon settlement listener** | Multi-day | Latency-sensitive strategies only |
 | **pUSD in wallet_reconcile** | Medium | Reduces false drift alerts |
-| **Sharpe/Sortino in weekly report** | Small PR | Input now available: trades.jsonl writer landed d079f93; stable equity series landed via (2b) BotState mirror at commit `8ff2236`. Derived-stats pipeline foundations landed in PR1 (`e92f915`) and PR2 (`9e26fae`) — `utils/derived_stats.py` + `utils/settlements.py` are the natural home for Sharpe/Sortino aggregation. Still a single-PR scale task. |
+| **Sharpe/Sortino in weekly report** | Small PR | **DONE** 2026-05-26 — commit `9f951e5` (decision-log row `e217907`, `.swarm-decisions.md` `sharpe-sortino-weekly-report`). `compute_sortino` added to `utils/risk_metrics.py` alongside `compute_sharpe` (mirrors locks 3–5: rf=MAR=0, sqrt(365), ≥20 returns); `build_daily_equity_series_from_trades` + `_parse_trade_ts` added to `utils/derived_stats.py` (last `equity_after` per UTC day, forward-fill flat across gap days); `WeeklyReport.sharpe`/`.sortino` fields + markdown rows in `scripts/weekly_report.py`. Locked all-time scope (not windowed — a 7-day window cannot satisfy the ≥20-return gate), "n/a (insufficient data)" markdown placeholder. Suite 447 → 464 (+17 tests). Fence-safe (`risk_manager.py` untouched). Honest post-mortem on the "natural home" prediction below: half-right and half-wrong. The series-builder DID land in `utils/derived_stats.py` (reusing PR1's `_iter_jsonl_records` + `_resolve_trades_path` — correct prediction). Sortino did NOT land in `utils/settlements.py`; it landed in `utils/risk_metrics.py` alongside `compute_sharpe`, which is the actual canonical home for risk-ratio helpers (a fact this row missed at write time). `utils/settlements.py` was untouched. |
 
-Honest sizing: **ledger DB + listener** are **multi-day refactors**; correlation fix and Sharpe are **single PR** scale.
+Honest sizing: **ledger DB + listener** are **multi-day refactors**; correlation fix and Sharpe **were** **single PR** scale (correlation fix DONE 2026-05-08 at `704ddcc`; Sharpe/Sortino in weekly report DONE 2026-05-26 at `9f951e5`).
