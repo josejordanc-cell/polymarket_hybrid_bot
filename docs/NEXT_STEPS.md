@@ -10,14 +10,23 @@ Rough effort and dependencies. Dates relative to **2026-05-02**.
 > in commit `d079f93`. Piece (2b) — equity/positions BotState mirror —
 > landed at commit `8ff2236` (turned out to be fence-safe via the
 > public-accessor polling-loop variant) and was runtime-verified live on
-> the droplet at commit `54cf1fc`. Owed runtime gap for (1)/(2a): no
-> deterministic trigger exists for the `_exec_and_record` fill path —
-> see `.swarm-decisions.md` `b1-fill-runtime-update` for close criteria.
-> Items marked **DONE** below are already in `main`; the live priorities
-> are the still-open items + anything new captured under
+> the droplet at commit `54cf1fc`. The follow-on derived-stats epic
+> closed the last five `GlobalStats` zero stubs: PR1 (`e92f915`) wired
+> `pnlMonth` / `pnlAllTime` / `totalTrades`; PR2 (`9e26fae`) wired
+> `winRate` (0–100 percentage) and `streak` (signed) via a new
+> settlement-persistence pipeline (`utils/settlements.py`) and made the
+> suite hermetic at 447 passing. **GlobalStats epic COMPLETE.** Droplet
+> redeployed to `2f8bcac` (image `4cff62dd`). Two PASSIVE owed-gaps
+> remain (no action required): (a) `b1-fill` runtime obs — await a
+> natural sim fill to populate `trades.jsonl` → `totalTrades` /
+> `fills[]` go live; (b) PR2 runtime obs — await a real market
+> resolution to populate `settlements.jsonl` → `winRate` / `streak`
+> go non-zero. Items marked **DONE** below are already in `main`; the
+> live priorities are the still-open items + anything new captured under
 > `CHANGELOG.md` `[Unreleased]`. The §4 "Dashboard integration" block is
-> superseded by the v0.2.9 wave — see CHANGELOG and
-> `.swarm-decisions.md` (entries prefixed `v029-`, `b1-`, and `2b-`) for details.
+> superseded by the v0.2.9 wave — see CHANGELOG and `.swarm-decisions.md`
+> (entries prefixed `v029-`, `b1-`, `2b-`, `derived-stats-pr1`,
+> `derived-stats-pr2`) for details.
 
 ---
 
@@ -90,6 +99,6 @@ remains accurate.
 | **pending_orders persistence** | Medium | If restarts during live cause pain |
 | **Polygon settlement listener** | Multi-day | Latency-sensitive strategies only |
 | **pUSD in wallet_reconcile** | Medium | Reduces false drift alerts |
-| **Sharpe/Sortino in weekly report** | Small PR | Input now available: trades.jsonl writer landed d079f93; stable equity series landed via (2b) BotState mirror at commit `8ff2236`. Still gated on a derived-stats pipeline that aggregates win/loss/Sharpe/Sortino from those inputs (separate scope; see CHANGELOG [Unreleased] "Five GlobalStats zero stubs" out-of-scope row). |
+| **Sharpe/Sortino in weekly report** | Small PR | Input now available: trades.jsonl writer landed d079f93; stable equity series landed via (2b) BotState mirror at commit `8ff2236`. Derived-stats pipeline foundations landed in PR1 (`e92f915`) and PR2 (`9e26fae`) — `utils/derived_stats.py` + `utils/settlements.py` are the natural home for Sharpe/Sortino aggregation. Still a single-PR scale task. |
 
 Honest sizing: **ledger DB + listener** are **multi-day refactors**; correlation fix and Sharpe are **single PR** scale.

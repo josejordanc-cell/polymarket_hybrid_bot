@@ -304,7 +304,7 @@ Per-sub-phase rationale and decision trail live in
 `.swarm-decisions.md` (look for entries prefixed `v029-`). The
 CHANGELOG.md `[Unreleased]` block has the user-facing summary.
 
-> **Caveat (2026-05-26):** As of (2b) (commit `8ff2236`), `state.equity` is polled live from `risk.equity` every 5s, so the `equity` and `risk` chains are LIVE. `monthlyPnl` and the five `GlobalStats` zero stubs (pnlMonth/pnlAllTime/winRate/totalTrades/streak) remain deferred. See CHANGELOG [Unreleased] Known issues + "Profitability epic — piece (2b)" Added entry.
+> **Caveat (2026-05-26):** As of (2b) (commit `8ff2236`), `state.equity` is polled live from `risk.equity` every 5s, so the `equity` and `risk` chains are LIVE. All five `GlobalStats` zero stubs (pnlMonth/pnlAllTime/winRate/totalTrades/streak) shipped via the derived-stats epic — PR1 (`e92f915`) and PR2 (`9e26fae`). Only `monthlyPnl`'s output remains structurally gated by ≥2-EquityPoints-per-month accumulation (helper-side gate inside `compute_monthly_pnl`, not a stub). See CHANGELOG [Unreleased] "Derived-stats epic — PR1 + PR2" entry.
 
 Three operational follow-ups for contributors:
 
