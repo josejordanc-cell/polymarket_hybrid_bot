@@ -235,20 +235,18 @@ Static labels on every series: **`experiment_id`**, **`mode`**. Fill counters ad
 
 ### `scripts/weekly_report.py`
 
-Log-only report; **requires** `--experiment-id`. If omitted, prints discovered IDs in the window to stderr and exits **2**.
+Trades-aggregate report driven by `BOT_DATA_DIR/trades.jsonl` (written per-fill by `utils.trades.persist_fill` since `d079f93`). Window is selected by `--weeks N` (default `1`); the file is the only input source — there are no `--logs` / `--start` / `--end` / `--experiment-id` flags. Always writes a file to `BOT_REPORT_DIR` (default `BOT_DATA_DIR/reports/weekly_report_<YYYYMMDD>.{md,json}`); `--stdout` is additive. Returns exit **0** even when the trade log is missing or empty (the report carries an explanatory note in that case).
 
 ```bash
-# List experiments (omit --experiment-id): stderr lists IDs, exit 2
-python scripts/weekly_report.py --logs 'logs/*.jsonl' --start 2026-04-26 --end 2026-05-02
+# Trailing 1 week, markdown, file only (canonical production invocation per DEPLOY_DO.md:37)
+python -m scripts.weekly_report --weeks 1
 
-# Markdown (default)
-python scripts/weekly_report.py --logs bot.log --start 2026-04-26 --end 2026-05-02 --experiment-id default
+# Trailing 4 weeks, JSON, also print to stdout
+python -m scripts.weekly_report --weeks 4 --format json --stdout
 
-# JSON
-python scripts/weekly_report.py --logs bot.log --start 2026-04-26T00:00:00Z --end 2026-05-02 --experiment-id arm_a --format json
+# Verbose: print BOT_DATA_DIR + output path on stderr
+python -m scripts.weekly_report --weeks 1 -v
 ```
-
-**Strictness:** Only log lines whose `experiment_id` field **exactly equals** the argument are included. Lines without `experiment_id` are excluded (not coerced).
 
 **Arb PnL model:** For `intra_arbitrage`, the report pairs YES/NO **`trade_result`** events by FIFO per market prefix, matches each pair to the next **`arb_bundle_balanced` / `arb_unwind` / `arb_unwind_skipped`** completion by **`bundle_id`**, and sets bundle PnL = **`leg_yes_pnl + leg_no_pnl + unwind_pnl`** (cashflow with fee model aligned to `POLYMARKET_FEE_PER_SIDE`). **`arb_unwind_skipped`** rows are **notes only** — **not** added to bundle PnL. Orphan legs and unmatched completions appear in JSON warning fields.
 

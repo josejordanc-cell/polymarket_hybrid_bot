@@ -91,10 +91,13 @@ Assume JSON logs are collected (Docker `json-file` or shipper), `BOT_EXPERIMENT_
 ### 14. `weekly_report.py` on the sim window
 
 ```bash
-python scripts/weekly_report.py --logs <paths> --start <UTC> --end <UTC> --experiment-id <same as run> --format json
+# Sim runs for 48–72h, so --weeks 1 covers the window; bump if needed.
+python -m scripts.weekly_report --weeks 1 --format json --stdout
 ```
 
-- **Pass:** Exit 0; JSON well-formed; top-level keys `arb_unmatched_pairs` and `arb_unmatched_completions` (see `docs/HANDOFF.md` §5) both **0** or discrepancy **explained** in writing.
+- **Pass:** Exit 0; JSON well-formed; `trades_filled > 0` (the writer at `utils.trades.persist_fill` populates `BOT_DATA_DIR/trades.jsonl` on every accepted fill since `d079f93`); `fees_paid_usdc` non-negative and consistent with `BOT_RISK_BANKROLL_USD`. If `notes` carries a "No trade log at ..." or "Trade log is empty" entry, the sim did not produce any fills — investigate before flipping.
+
+> **Note (post-CLI-modernisation):** the legacy `arb_unmatched_pairs` / `arb_unmatched_completions` top-level keys are NOT emitted by the current trades-aggregate report (current `WeeklyReport` fields: `trades_total`, `trades_filled`, `trades_cancelled`, `realized_pnl_usdc`, `unrealized_pnl_usdc`, `fees_paid_usdc`, `sharpe`, `sortino`, `notes`). Arb-bundle FIFO accounting was a property of the log-driven v0.2.0 report; the JSONL-driven v0.2.1+ report does not reconstruct bundles. If you need bundle-level audit, parse structlog `arb_bundle_balanced` / `arb_unwind` / `arb_unwind_skipped` events directly.
 
 ### 15. Manual `wallet_reconcile.py`
 

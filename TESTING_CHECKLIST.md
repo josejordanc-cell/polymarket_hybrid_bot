@@ -42,21 +42,25 @@ python scripts/wallet_reconcile.py --no-metrics --log-file bot.log --threshold 5
 
 ## 4. Smoke: `weekly_report.py` with fixture
 
+The current report is driven by `BOT_DATA_DIR/trades.jsonl` (not structlog files). Point `BOT_DATA_DIR` at a tmp dir seeded with the trades fixture, then invoke the CLI:
+
 ```bash
-python scripts/weekly_report.py \
-  --logs "tests/fixtures/sample_logs.jsonl" \
-  --start 2026-04-26 \
-  --end 2026-05-02 \
-  --experiment-id default \
-  --format json | python -m json.tool | head -40
+TMPDIR=$(mktemp -d)
+cp tests/fixtures/sample_trades.jsonl "$TMPDIR/trades.jsonl"
+BOT_DATA_DIR="$TMPDIR" BOT_REPORT_DIR="$TMPDIR/reports" \
+  python -m scripts.weekly_report --weeks 8 --format json --stdout \
+  | python -m json.tool | head -40
 ```
 
-**Pass:** Exit 0; JSON contains `experiment_id`, `strategies`, `total_pnl_usd`, `max_intraweek_drawdown_pct`.
+**Pass:** Exit 0; JSON contains `week_start`, `week_end`, `trades_total`, `trades_filled`, `realized_pnl_usdc`, `fees_paid_usdc`, `sharpe`, `sortino`, `notes`. With the bundled `sample_trades.jsonl` fixture under `--weeks 8`, expect `trades_total == 2` / `trades_filled == 1` (matches `tests/test_weekly_report.py::test_generate_report_sample_fixture_window`). `sharpe` / `sortino` will be `null` (fixture has fewer than 20 daily returns — honesty gate, see `utils.risk_metrics.compute_sharpe` / `compute_sortino`).
 
-Strictness check (should exit 2 and list experiments on stderr):
+Empty-trade-log check (current CLI does NOT exit 2 on missing input — it returns exit 0 with an explanatory note):
 
 ```bash
-python scripts/weekly_report.py --logs "tests/fixtures/sample_logs.jsonl" --start 2026-04-26 --end 2026-05-02 2>/dev/null; test $? -eq 2
+EMPTY=$(mktemp -d)
+BOT_DATA_DIR="$EMPTY" BOT_REPORT_DIR="$EMPTY/out" \
+  python -m scripts.weekly_report --weeks 1 --format json --stdout \
+  | python -c 'import json,sys; r=json.load(sys.stdin); assert r["trades_total"]==0; assert any("No trade log" in n for n in r["notes"]), r["notes"]'
 ```
 
 ## 5. Docker (optional)
