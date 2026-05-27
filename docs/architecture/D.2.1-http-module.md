@@ -8,6 +8,10 @@
 
 ---
 
+> ⚠️ **READER NOTE (2026-05-27 annotation).** This is the **D.2.1 forward-looking design artifact** written 2026-05-12 before D.2.2/D.2.3/D.2.4 implementation. Most "will" / "must" / "D.2.2 to enumerate" prose was correct as design intent, but the implementation diverged in several details — most notably the `BOT_HTTP_API_*` env-var prefix (vs the doc's proposed `BOT_API_*`) and the `config.http_api.*` config namespace (vs the doc's proposed `config.api.*`). Both names were renamed during D.2.2/D.2.3; the rename was load-bearing enough to cause a production 401 incident closed by hotfix `7c0e313` + `d39696a`. The seven actively-misleading factual errors flagged by the 2026-05-27 audit are corrected inline below; the remaining future-tense framing is preserved as historical design context. **For current-state references** (real env vars, real config paths, real route list, current schema field shapes) consult: `config/settings.py:239` for `HttpApiConfig`; `api/auth.py:115,179` for `verify_bearer` / `verify_ws_ticket`; `api/routes_rest.py:884-921` for the live route table; `api/routes_ws.py:9-76` for the real WS auth wire format (`?ticket=<jwt>`, NOT `?token=`); `api/state.py:107-160` for the current `BotState` field list; CHANGELOG `[Unreleased]` D.2.x entries; `README.md:15`; and `SECURITY.md` "Debug-injection endpoints". OQ-1 / OQ-2 / OQ-3 / OQ-4 open-question framings are mostly resolved — annotations below mark which.
+
+---
+
 ## 1. Summary
 
 This module adds an HTTP/WebSocket server to the `polymarket_hybrid_bot` that satisfies the integration contract defined in `docs/BOT_CONTRACT.md` v1.0. The server is built on **`aiohttp.web`** (server-side), which is already present as a direct dependency (`aiohttp==3.10.10` in `requirements.in`), adding zero new packages to the bot's dependency surface. The server runs as an additional `asyncio.create_task()` inside the existing `run_bot()` task graph in `main.py`, sharing the same event loop as all strategy, feed, and reconciliation tasks. It is placed under a new **`api/`** directory at the repo root, consistent with the project's flat top-level module layout (`strategies/`, `data_feeds/`, `execution/`, `observability/`). State is shared between the strategy loop and the HTTP module via a single `BotState` dataclass instance passed by reference at startup; the API layer reads from it, and the strategy loop writes to it. A bounded `asyncio.Queue` per WebSocket client handles back-pressure for streamed events.
@@ -70,22 +74,31 @@ Exposes: `run(state, shutdown) -> None`.
 
 #### `api/routes_rest.py`
 
-Implements the three REST endpoint handlers:
+Implements the REST endpoint handlers. **As shipped (`api/routes_rest.py:884-921`), 7 routes are registered, not 3** — the design listed the 3 contract endpoints below, and v0.2.9 (3h + b9-fix + B.8) added 4 sim-mode-only `/debug/*` endpoints for runtime smoke. The four debug endpoints are 404-gated by `_verify_debug_mode` BEFORE the Bearer auth check, so non-sim deployments don't acknowledge them.
+
+Contract endpoints (always live):
 
 - `GET /dashboard/snapshot` — reads `state` and serialises a `DashboardSnapshotSchema`-compatible JSON response.
 - `POST /api/strategies/config` — validates the request body against `StrategyConfigPatchSchema`, applies the change to `state.strategy_configs`, triggers `emit.strategy_update()` to push a `STRATEGY_UPDATE` WS message to all connected clients.
 - `POST /emergency-stop` — sets `state.kill_switch_requested = True` (the strategy loop observes this flag on its next iteration and activates the kill switch), emits `STRATEGY_UPDATE` for all strategies showing `status: "paused"`, returns `{"ok": true, "stoppedAt": <epoch_ms>}`.
 
-All handlers call `api.auth.verify_bearer(request)` before doing anything else; return **401** on failure.
+Debug endpoints (sim-mode only; 404 in live mode before auth check):
+
+- `POST /debug/inject-position` — synthetic position injection for snapshot smoke (v0.2.9 3h).
+- `POST /debug/clear-positions` — clears injected positions (v0.2.9 3h).
+- `POST /debug/inject-alert` — exercises the full B.9 alert path (v0.2.9 b9-fix).
+- `POST /debug/inject-log` — exercises the B.8 log path with 3f Option C lossy-level-map applied (v0.2.9 B.8).
+
+All handlers call `api.auth.verify_bearer(request)` before doing anything else; return **401** on failure. Debug handlers additionally self-gate via `_verify_debug_mode` (returns 404 in non-sim mode); see `SECURITY.md` "Debug-injection endpoints".
 
 Imports: `aiohttp.web`, `api.auth`, `api.state.BotState`, `api.schemas`, `api.emit`, `time`, `structlog`.
-Exposes: `setup_routes(app, state)` — registers all three routes on the `aiohttp.web.Application`.
+Exposes: `setup_routes(app, state, config)` — registers all 7 routes on the `aiohttp.web.Application`.
 
 #### `api/routes_ws.py`
 
 Implements the WebSocket server handler at `/ws`.
 
-On new connection: reads `?token=` query param, calls `api.auth.verify_ws_ticket(token)`. On failure, closes with code **4001**. On success, creates a per-client `asyncio.Queue(maxsize=1000)`, adds it to a global subscriber registry in `state.ws_subscribers`, then enters the main receive/send loop. Responds to `{"type":"PING"}` with `{"type":"PONG"}`. On client disconnect or cancellation, removes the queue from the registry and closes cleanly.
+On new connection: reads `?ticket=` query param (NOT `?token=` as the design originally proposed — see `api/routes_ws.py:76` `request.query.get("ticket")`), calls `api.auth.verify_ws_ticket(ticket)`. On failure, closes with code **4001**. On success, creates a per-client `asyncio.Queue(maxsize=1000)`, adds it to a global subscriber registry in `state.ws_subscribers`, then enters the main receive/send loop. Responds to `{"type":"PING"}` with `{"type":"PONG"}`. On client disconnect or cancellation, removes the queue from the registry and closes cleanly.
 
 The send loop is a separate coroutine that drains the per-client queue and sends JSON-serialised messages. Overflow is handled by the queue's `put_nowait` with try/except `asyncio.QueueFull` in `emit.py` (see D-5).
 
@@ -96,15 +109,15 @@ Exposes: `websocket_handler(request)` — an `aiohttp.web` view function registe
 
 Two public functions:
 
-- `verify_bearer(request: aiohttp.web.Request) -> bool` — checks `Authorization: Bearer <token>` against `config.api.bot_api_token` (a `SecretStr` field added to `config/settings.py` in D.2.2). Returns `True` on match, `False` otherwise.
-- `verify_ws_ticket(token: str) -> bool` — verifies an HS256 JWT using `WS_TICKET_SECRET` (a `SecretStr` field in `config/settings.py`). Checks signature, algorithm (`HS256` only — reject `none` and RS256), and `exp`. Optionally tracks consumed `sub` (UUID) in a bounded in-memory `dict[str, float]` (sub → expiry) to implement single-use semantics; evicts entries whose `exp` has passed on each access to avoid unbounded growth. Returns `True` on valid-and-not-consumed ticket, `False` otherwise.
+- `verify_bearer(request: aiohttp.web.Request) -> bool` — checks `Authorization: Bearer <token>` against `config.http_api.bot_api_token` (a `SecretStr` field in `config/settings.py:239` `HttpApiConfig`; the design originally proposed `config.api.bot_api_token` but D.2.3 hotfix `7c0e313` realigned to `config.http_api.*` after a production 401 incident). Returns `True` on match, `False` otherwise.
+- `verify_ws_ticket(ticket: str) -> bool` — verifies an HS256 JWT using `config.http_api.ws_ticket_secret` (a `SecretStr` field in `config/settings.py:239`). Checks signature, algorithm (`HS256` only — reject `none` and RS256), and `exp`. Optionally tracks consumed `sub` (UUID) in a bounded in-memory `dict[str, float]` (sub → expiry) to implement single-use semantics; evicts entries whose `exp` has passed on each access to avoid unbounded growth. Returns `True` on valid-and-not-consumed ticket, `False` otherwise.
 
 JWT verification requires `PyJWT>=2.8.0`. This package is **not yet in `requirements.in`**. It must be added before D.2.2 begins. See Open Questions.
 
 Imports: `aiohttp.web`, `jwt` (PyJWT), `config.settings.BotConfig`, `time`, `structlog`.
 Exposes: `verify_bearer`, `verify_ws_ticket`.
 
-**Security note:** `verify_bearer` must call `.get_secret_value()` on the `SecretStr` at the point of comparison and must not log the token. Same for `WS_TICKET_SECRET` in `verify_ws_ticket`. This is consistent with the existing secret-handling pattern throughout the codebase (`CLAUDE.md` hard rule 3).
+**Security note:** `verify_bearer` must call `.get_secret_value()` on the `SecretStr` at the point of comparison and must not log the token. Same for `config.http_api.ws_ticket_secret` in `verify_ws_ticket`. This is consistent with the existing secret-handling pattern throughout the codebase (`CLAUDE.md` hard rule 3).
 
 #### `api/state.py`
 
@@ -136,6 +149,20 @@ class BotState:
 
     # Monotonically increasing snapshot counter (replaces lastUpdatedAt clock dependency)
     last_updated_at_ms: int
+
+    # --- v0.2.9 additions (NOT in the original D.2.1 design; landed in B.7/B.8/B.9 + 2b) ---
+    # See api/state.py:107-160 for the canonical current shape.
+
+    # Live equity + day-start (polled from RiskManager every 5s by utils.risk_state_mirror; v0.2.9 piece 2b, commit 8ff2236)
+    equity: float
+    day_start_equity: float
+
+    # Bounded daily-close equity series (one EquityPoint per UTC calendar day; v0.2.9 B.7)
+    equity_history: deque  # maxlen=200 (~6.5 months)
+
+    # Bounded log + alert deques fed by utils.logs.log_to_dashboard / utils.alerts.send_alert (v0.2.9 B.8, B.9)
+    recent_logs: deque    # maxlen=500
+    recent_alerts: deque  # maxlen=200
 
     # asyncio.Lock for writes that need atomicity across multiple fields
     _write_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -202,7 +229,7 @@ The bot's `run_bot()` function at `main.py:381-397` builds a `tasks` list and fe
 
 **Port:** `8080`. Port 9091 is taken by Prometheus (`observability/metrics_exporter.py`, `config/settings.py`). The default in `BOT_CONTRACT.md` Appendix A confirms `http://localhost:8080` as the expected bot origin.
 
-**Bind address:** Configurable via a new `BOT_API_BIND_HOST` env var (defaulting to `0.0.0.0`). In the Docker container the bot listens on all interfaces because the dashboard connects over the Docker network or the public internet. On a developer workstation, operators may override to `127.0.0.1` to prevent accidental external exposure. The existing Prometheus server binds to `127.0.0.1` (T1) but that constraint was specific to metrics; the API server must be reachable from the dashboard container, so `0.0.0.0` is the correct default.
+**Bind address:** Configurable via the `BOT_HTTP_API_BIND_HOST` env var (defaulting to `0.0.0.0`; the original design proposed `BOT_API_BIND_HOST`, renamed during D.2.2). In the Docker container the bot listens on all interfaces because the dashboard connects over the Docker network or the public internet. On a developer workstation, operators may override to `127.0.0.1` to prevent accidental external exposure. The existing Prometheus server binds to `127.0.0.1` (T1) but that constraint was specific to metrics; the API server must be reachable from the dashboard container, so `0.0.0.0` is the correct default.
 
 **Shutdown:** `_SHUTDOWN` is a module-level `asyncio.Event` at `main.py:29`, set on `SIGINT`/`SIGTERM` by `_install_signal_handlers()`. `api_server.run()` receives `shutdown` as a parameter, polls `shutdown.is_set()` in its wait loop, and calls `runner.cleanup()` when signalled. The `aiohttp.web.AppRunner` teardown closes all active WebSocket connections before returning; clients will receive a normal WebSocket close frame.
 
@@ -235,17 +262,17 @@ The `name="api_server"` tag follows the existing naming convention and surfaces 
 
 ### D-3a: Auth model — REST uses Bearer, WebSocket uses signed JWT ticket
 
-**Choice: distinct auth surfaces for REST vs WebSocket, both grounded in `config.api.*` secrets.**
+**Choice: distinct auth surfaces for REST vs WebSocket, both grounded in `config.http_api.*` secrets.** (Design originally proposed `config.api.*`; renamed during D.2.2/D.2.3 — see reader note at file head.)
 
 The HTTP module presents two independent authentication paths, one per transport. Conflating them (e.g. accepting a Bearer header on the WebSocket upgrade) is explicitly out of scope, as is rotating either secret on the contract's v1.0 timeline (rotation is a v1.1+ concern).
 
-**REST endpoints** — `GET /dashboard/snapshot`, `POST /api/strategies/config`, `POST /emergency-stop`. All three require an `Authorization: Bearer <token>` header where `<token>` equals `config.api.bot_api_token` (a `SecretStr` field added to `config/settings.py` in D.2.2; supplied via `BOT_API_TOKEN` env var). Handlers gate every request through `verify_bearer()` before any state read or write. Missing or mismatched tokens return HTTP 401 with no body discrimination between the two failure modes (don't leak whether the header was present-but-wrong vs absent). The token is server-to-server only — the dashboard's Next.js routes inject it (`lib/botUpstream.ts:botUpstreamHeaders()` per BOT_CONTRACT.md §3.1), never the browser.
+**REST endpoints** — `GET /dashboard/snapshot`, `POST /api/strategies/config`, `POST /emergency-stop` (plus the 4 sim-only `/debug/*` endpoints added in v0.2.9 — see route list above). All require an `Authorization: Bearer <token>` header where `<token>` equals `config.http_api.bot_api_token` (a `SecretStr` field on `HttpApiConfig` in `config/settings.py:239`; supplied via the **`BOT_HTTP_API_BOT_API_TOKEN`** env var, NOT the `BOT_API_TOKEN` originally proposed). Handlers gate every request through `verify_bearer()` before any state read or write. Missing or mismatched tokens return HTTP 401 with no body discrimination between the two failure modes (don't leak whether the header was present-but-wrong vs absent). The token is server-to-server only — the dashboard's Next.js routes inject it (`lib/botUpstream.ts:botUpstreamHeaders()` per BOT_CONTRACT.md §3.1), never the browser.
 
-**WebSocket endpoint** — `GET /ws` (upgrade). Auth is via `?token=<jwt>` query parameter, where `<jwt>` is an HS256-signed JWT the dashboard mints via `GET /api/ws-ticket` using `WS_TICKET_SECRET` (a separate `SecretStr` field; supplied via `WS_TICKET_SECRET` env var). The bot verifies the JWT through `verify_ws_ticket()` before completing the upgrade handshake. The bot **shares the same `WS_TICKET_SECRET` value** as the dashboard — that's how the JWT's signature is verifiable on both sides. The bot does **not** mint tickets; it only verifies them. Invalid tickets (bad signature, wrong algorithm, expired `exp`, or already-consumed `sub`) result in WebSocket close code `4001` (per `BOT_CONTRACT.md` §3.2) without completing the handshake.
+**WebSocket endpoint** — `GET /ws` (upgrade). Auth is via `?ticket=<jwt>` query parameter (NOT `?token=` as originally proposed), where `<jwt>` is an HS256-signed JWT the dashboard mints via `GET /api/ws-ticket` using `config.http_api.ws_ticket_secret` (a separate `SecretStr` field on `HttpApiConfig`; supplied via the **`BOT_HTTP_API_WS_TICKET_SECRET`** env var). The bot verifies the JWT through `verify_ws_ticket()` before completing the upgrade handshake. The bot **shares the same secret value** as the dashboard — that's how the JWT's signature is verifiable on both sides. The bot does **not** mint tickets; it only verifies them. Invalid tickets (bad signature, wrong algorithm, expired `exp`, or already-consumed `sub`) result in WebSocket close code `4001` (per `BOT_CONTRACT.md` §3.2) without completing the handshake.
 
-**Why two secrets, not one.** `BOT_API_TOKEN` is a long-lived server-to-server credential held only by the dashboard's Next.js runtime; rotating it requires a coordinated dashboard redeploy. `WS_TICKET_SECRET` signs short-lived (30-second TTL) browser-facing tickets that are themselves the auth payload; the secret never leaves the dashboard server or the bot. Treating them as one credential would either lengthen `WS_TICKET_SECRET`'s exposure (it would be in the dashboard's outbound REST proxy too) or shorten `BOT_API_TOKEN`'s effective lifetime to JWT TTL bounds. The separation matches `BOT_CONTRACT.md` §2 and the dashboard's existing `app/api/ws-ticket/route.ts` design.
+**Why two secrets, not one.** `BOT_HTTP_API_BOT_API_TOKEN` is a long-lived server-to-server credential held only by the dashboard's Next.js runtime; rotating it requires a coordinated dashboard redeploy. `BOT_HTTP_API_WS_TICKET_SECRET` signs short-lived (30-second TTL) browser-facing tickets that are themselves the auth payload; the secret never leaves the dashboard server or the bot. Treating them as one credential would either lengthen the ticket secret's exposure (it would be in the dashboard's outbound REST proxy too) or shorten the API token's effective lifetime to JWT TTL bounds. The separation matches `BOT_CONTRACT.md` §2 and the dashboard's existing `app/api/ws-ticket/route.ts` design.
 
-**Secret loading.** Both tokens land in `config/settings.py` as Pydantic `SecretStr` fields under a new `api` config nested model (`config.api.bot_api_token`, `config.api.ws_ticket_secret`). The fields are required (no defaults) when the API server is enabled. D.2.2 will add a feature flag (`config.api.enabled`, default `False`) so the API task only joins the gather list when explicitly turned on — this lets sim mode continue to run without contract surface exposure.
+**Secret loading.** Both tokens land in `config/settings.py:239` as Pydantic `SecretStr` fields on the `HttpApiConfig` nested model (`config.http_api.bot_api_token`, `config.http_api.ws_ticket_secret`). The fields default to empty `SecretStr("")` but the `_require_secrets_when_enabled` model-validator (`config/settings.py:251`) raises `ValueError` at startup if either is empty when `config.http_api.enabled=True`. A feature flag `config.http_api.enabled` (default `False`) gates whether the API task joins the gather list — sim mode runs without contract surface exposure unless the operator explicitly enables it.
 
 ---
 
@@ -373,7 +400,7 @@ tests/api/
 **No changes to existing files in this session.** The following files will be modified in D.2.2:
 
 - `main.py` — add `BotState` instantiation and `api_server` task.
-- `config/settings.py` — add `BOT_API_BIND_HOST`, `BOT_API_PORT`, `BOT_API_TOKEN` (SecretStr), `WS_TICKET_SECRET` (SecretStr) to `BotConfig`.
+- `config/settings.py` — as shipped, the `HttpApiConfig` nested model at `:239` (env prefix `BOT_HTTP_API_`) exposes: `BOT_HTTP_API_ENABLED`, `BOT_HTTP_API_BIND_HOST`, `BOT_HTTP_API_PORT`, `BOT_HTTP_API_BOT_API_TOKEN` (SecretStr), `BOT_HTTP_API_WS_TICKET_SECRET` (SecretStr). The original design proposed `BOT_API_BIND_HOST` / `BOT_API_PORT` / `BOT_API_TOKEN` / `WS_TICKET_SECRET`; the rename was load-bearing (cf. D.2.3 hotfix `7c0e313`).
 - `requirements.in` — add `PyJWT>=2.8.0`.
 
 ---
@@ -407,7 +434,7 @@ Browser                    Dashboard BFF         Bot WS server        Strategy l
    |-- GET /api/ws-ticket ------>|                      |                    |
    |<-- {"ticket": "<jwt>"} ----|                      |                    |
    |                            |                      |                    |
-   |-- WS connect ?token=<jwt> ----------------->|     |                    |
+   |-- WS connect ?ticket=<jwt> ---------------->|     |                    |
    |                            |           verify_ws_ticket()              |
    |                            |           <-- True                        |
    |                            |           accept + register queue         |
@@ -449,20 +476,21 @@ Browser                    Dashboard BFF         Bot REST server      BotState  
 
 The following items must be resolved before or during D.2.2/D.2.3/D.2.4. They are listed here so the human and implementers can prioritize.
 
-### OQ-1: PyJWT dependency (must resolve before D.2.2)
+### OQ-1: PyJWT dependency — **RESOLVED**
 
-`PyJWT>=2.8.0` is not currently in `requirements.in`. It is required by `api/auth.py` for HS256 JWT verification (`WS_TICKET_SECRET`). The human must approve adding it to `requirements.in` and regenerating `requirements.txt` (with `--generate-hashes`) before D.2.2 begins.
+`PyJWT>=2.8.0` is pinned in `requirements.in` and resolved to `pyjwt==2.12.1` in the hash-pinned `requirements.txt`. Used by `api/auth.py:213` for HS256 JWT verification of WS tickets. `cryptography` is already a transitive dependency (via `eth-account`), so PyJWT's optional `cryptography` extras are satisfied. No further action.
 
-`cryptography==48.0.0` is already a transitive dependency (via `eth-account`), so PyJWT's optional `cryptography` extras are already satisfied.
+### OQ-2: `HttpApiConfig` env vars in `.env.example` — **PARTIALLY RESOLVED, real gap remains**
 
-### OQ-2: `BOT_API_TOKEN` and `WS_TICKET_SECRET` in `.env.example`
+The shipped env vars (per `config/settings.py:239` `HttpApiConfig` with `env_prefix="BOT_HTTP_API_"`) are:
 
-Two new secret env vars must be added to `.env.example` and documented in `deploy/DEPLOY_DO.md`:
+- **`BOT_HTTP_API_ENABLED`** (bool, default `False`) — feature flag; the API task only joins the gather list when `true`.
+- **`BOT_HTTP_API_BIND_HOST`** (str, default `0.0.0.0`) — bind address for the aiohttp server.
+- **`BOT_HTTP_API_PORT`** (int, default `8080`) — listen port.
+- **`BOT_HTTP_API_BOT_API_TOKEN`** (SecretStr) — REST Bearer token the dashboard's `Authorization: Bearer` header carries. Fail-closed: `_require_secrets_when_enabled` model-validator at `config/settings.py:251` raises `ValueError` at startup if empty when `BOT_HTTP_API_ENABLED=true`. (The original design proposed `BOT_API_TOKEN`; renamed during D.2.2/D.2.3.)
+- **`BOT_HTTP_API_WS_TICKET_SECRET`** (SecretStr) — HS256 key shared with the dashboard's `WS_TICKET_SECRET`. Must be identical on both sides. Same fail-closed validator. (The original design proposed bare `WS_TICKET_SECRET`; renamed during D.2.2/D.2.3.)
 
-- `BOT_API_TOKEN` — the shared secret that the dashboard's `Authorization: Bearer` header carries. Minimum 32 characters. Operators must set this; the bot returns 401 on all REST requests if it is unset (fail-closed).
-- `WS_TICKET_SECRET` — the HS256 key shared with the dashboard's `WS_TICKET_SECRET`. Must be identical on both sides. Minimum 32 characters (same constraint as dashboard's `lib/env.ts`).
-
-These are secrets, so they follow the existing `SecretStr` pattern (CLAUDE.md hard rule 3).
+**Real gap (separate from this doc; flagged 2026-05-27 audit):** none of the five `BOT_HTTP_API_*` env vars currently appear in `.env.example` (verified empty `grep`). Operators turning on the HTTP API must consult `README.md:15`, `config/settings.py:239`, or the dashboard's own README — there's no template entry. Tracked as a separate `.env.example` follow-up; not part of this D.2.1 design correction.
 
 ### OQ-3: Exact `BotState` field mappings (D.2.2 to enumerate)
 
