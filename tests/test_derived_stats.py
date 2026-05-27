@@ -17,9 +17,11 @@ import pytest
 
 from api.schemas import EquityPoint
 from utils.derived_stats import (
-    _iter_trade_records,
+    _iter_jsonl_records,
     compute_pnl_all_time,
     compute_pnl_month,
+    compute_streak,
+    compute_win_rate,
     count_total_trades,
 )
 from utils.types import utc_now
@@ -214,20 +216,245 @@ def test_count_total_trades_uses_bot_data_dir_env(
 
 
 # ---------------------------------------------------------------------------
-# _iter_trade_records (private reader)
+# _iter_jsonl_records (private reader)
 # ---------------------------------------------------------------------------
 
 
-def test_iter_trade_records_missing_file_yields_nothing(tmp_path: Path) -> None:
+def test_iter_jsonl_records_missing_file_yields_nothing(tmp_path: Path) -> None:
     nonexistent = tmp_path / "missing.jsonl"
-    assert list(_iter_trade_records(nonexistent)) == []
+    assert list(_iter_jsonl_records(nonexistent)) == []
 
 
-def test_iter_trade_records_skips_blank_lines(tmp_path: Path) -> None:
+def test_iter_jsonl_records_skips_blank_lines(tmp_path: Path) -> None:
     out = tmp_path / "trades.jsonl"
     out.write_text(
         '{"a": 1}\n\n   \n{"b": 2}\n',
         encoding="utf-8",
     )
-    records = list(_iter_trade_records(out))
+    records = list(_iter_jsonl_records(out))
     assert records == [{"a": 1}, {"b": 2}]
+
+
+# ---------------------------------------------------------------------------
+# compute_win_rate (PR2)
+# ---------------------------------------------------------------------------
+
+
+def _write_settlements(path: Path, rows: list[dict]) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, separators=(",", ":")) + "\n")
+
+
+def test_win_rate_all_wins(tmp_path: Path) -> None:
+    # NOTE: compute_win_rate returns a PERCENTAGE on a 0–100 scale
+    # (locked cross-repo contract — dashboard appends "%" and does NOT
+    # multiply by 100). All-wins → 100.0, not 1.0.
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": 1.0, "market_id": "0xa"},
+            {"pnl": 2.5, "market_id": "0xb"},
+            {"pnl": 0.5, "market_id": "0xc"},
+        ],
+    )
+    assert compute_win_rate(path=out) == 100.0
+
+
+def test_win_rate_all_losses(tmp_path: Path) -> None:
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": -1.0, "market_id": "0xa"},
+            {"pnl": -0.1, "market_id": "0xb"},
+        ],
+    )
+    assert compute_win_rate(path=out) == 0.0
+
+
+def test_win_rate_mixed(tmp_path: Path) -> None:
+    """2 wins out of 4 non-break-even rows → 50.0 (0–100 scale)."""
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": 1.0, "market_id": "0xa"},   # win
+            {"pnl": -1.0, "market_id": "0xb"},  # loss
+            {"pnl": 2.0, "market_id": "0xc"},   # win
+            {"pnl": -3.0, "market_id": "0xd"},  # loss
+        ],
+    )
+    assert compute_win_rate(path=out) == 50.0
+
+
+def test_win_rate_excludes_break_evens_from_denominator(tmp_path: Path) -> None:
+    """pnl == 0 rows are excluded from BOTH numerator and denominator.
+    1 win + 1 loss + 2 break-evens → 1/2 = 50.0 (0–100 scale; not 25.0
+    from 1/4)."""
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": 1.0, "market_id": "0xa"},
+            {"pnl": 0.0, "market_id": "0xb"},  # excluded
+            {"pnl": -1.0, "market_id": "0xc"},
+            {"pnl": 0.0, "market_id": "0xd"},  # excluded
+        ],
+    )
+    assert compute_win_rate(path=out) == 50.0
+
+
+def test_win_rate_missing_file_returns_zero(tmp_path: Path) -> None:
+    assert compute_win_rate(path=tmp_path / "missing.jsonl") == 0.0
+
+
+def test_win_rate_empty_file_returns_zero(tmp_path: Path) -> None:
+    out = tmp_path / "settlements.jsonl"
+    out.touch()
+    assert compute_win_rate(path=out) == 0.0
+
+
+def test_win_rate_all_break_evens_returns_zero(tmp_path: Path) -> None:
+    """All-break-even → denominator 0 → return 0.0 (not divide-by-zero)."""
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": 0.0, "market_id": "0xa"},
+            {"pnl": 0.0, "market_id": "0xb"},
+        ],
+    )
+    assert compute_win_rate(path=out) == 0.0
+
+
+def test_win_rate_uses_bot_data_dir_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": 1.0, "market_id": "0xa"},
+            {"pnl": -1.0, "market_id": "0xb"},
+        ],
+    )
+    assert compute_win_rate() == 50.0  # default-path resolution works (0–100 scale)
+
+
+# ---------------------------------------------------------------------------
+# compute_streak (PR2)
+# ---------------------------------------------------------------------------
+
+
+def test_streak_three_wins_in_a_row(tmp_path: Path) -> None:
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": 1.0, "market_id": "0xa"},
+            {"pnl": 1.0, "market_id": "0xb"},
+            {"pnl": 1.0, "market_id": "0xc"},
+        ],
+    )
+    assert compute_streak(path=out) == 3
+
+
+def test_streak_two_losses_in_a_row_negative(tmp_path: Path) -> None:
+    """Loss streak returns NEGATIVE int."""
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": -1.0, "market_id": "0xa"},
+            {"pnl": -1.0, "market_id": "0xb"},
+        ],
+    )
+    assert compute_streak(path=out) == -2
+
+
+def test_streak_most_recent_break_even_returns_zero(tmp_path: Path) -> None:
+    """Break-even at the most recent row → streak resets to 0."""
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": 1.0, "market_id": "0xa"},
+            {"pnl": 1.0, "market_id": "0xb"},
+            {"pnl": 0.0, "market_id": "0xc"},  # most recent → break-even
+        ],
+    )
+    assert compute_streak(path=out) == 0
+
+
+def test_streak_break_even_mid_history_doesnt_affect_current(tmp_path: Path) -> None:
+    """A break-even mid-history doesn't extend across it. Current streak
+    counts only from most-recent backward until the first sign-break."""
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": 1.0, "market_id": "0xa"},   # win (old)
+            {"pnl": 0.0, "market_id": "0xb"},   # break-even
+            {"pnl": 1.0, "market_id": "0xc"},   # win
+            {"pnl": 1.0, "market_id": "0xd"},   # win (most recent)
+        ],
+    )
+    # From the end backward: win, win, then break-even stops the count → streak = 2
+    assert compute_streak(path=out) == 2
+
+
+def test_streak_ordering_respected_streak_broken_by_sign_change(tmp_path: Path) -> None:
+    """Streak counts from most recent backward until sign flips. A loss
+    after wins (or vice-versa) breaks the streak at the boundary."""
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": -1.0, "market_id": "0xa"},
+            {"pnl": -1.0, "market_id": "0xb"},
+            {"pnl": 1.0, "market_id": "0xc"},   # win
+            {"pnl": 1.0, "market_id": "0xd"},   # win (most recent)
+        ],
+    )
+    # Most-recent-backward: win, win, then a loss → streak = 2 (wins)
+    assert compute_streak(path=out) == 2
+
+
+def test_streak_missing_file_returns_zero(tmp_path: Path) -> None:
+    assert compute_streak(path=tmp_path / "missing.jsonl") == 0
+
+
+def test_streak_empty_file_returns_zero(tmp_path: Path) -> None:
+    out = tmp_path / "settlements.jsonl"
+    out.touch()
+    assert compute_streak(path=out) == 0
+
+
+def test_streak_single_win_returns_one(tmp_path: Path) -> None:
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(out, [{"pnl": 1.0, "market_id": "0xa"}])
+    assert compute_streak(path=out) == 1
+
+
+def test_streak_single_loss_returns_negative_one(tmp_path: Path) -> None:
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(out, [{"pnl": -1.0, "market_id": "0xa"}])
+    assert compute_streak(path=out) == -1
+
+
+def test_streak_uses_bot_data_dir_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
+    out = tmp_path / "settlements.jsonl"
+    _write_settlements(
+        out,
+        [
+            {"pnl": 1.0, "market_id": "0xa"},
+            {"pnl": 1.0, "market_id": "0xb"},
+        ],
+    )
+    assert compute_streak() == 2

@@ -134,7 +134,7 @@ def _resolve_trades_path() -> Path:
     return Path(os.environ.get("BOT_DATA_DIR", "data")) / "trades.jsonl"
 
 
-def _iter_trade_records(path: Path) -> Iterator[dict]:
+def _iter_jsonl_records(path: Path) -> Iterator[dict]:
     """Yield one ``dict`` per non-blank, JSON-parseable line in ``path``.
 
     Tolerates:
@@ -143,9 +143,10 @@ def _iter_trade_records(path: Path) -> Iterator[dict]:
       - Malformed JSON lines → skipped (logged at debug)
 
     Self-contained — does NOT import from ``scripts/weekly_report.py``
-    (zero coupling per PR1 spec). The parsing surface is intentionally
-    smaller than weekly_report's flexible-alias reader: this reader
-    only needs ``status`` for trade counting.
+    (zero coupling per PR1 spec). Generic JSONL reader shared by
+    ``count_total_trades`` (PR1), ``compute_win_rate`` (PR2), and
+    ``compute_streak`` (PR2). No schema-specific logic — callers
+    filter the yielded dicts by field name themselves.
     """
     if not path.is_file():
         return
@@ -187,7 +188,117 @@ def count_total_trades(path: Optional[Path] = None) -> int:
     """
     target = path if path is not None else _resolve_trades_path()
     count = 0
-    for record in _iter_trade_records(target):
+    for record in _iter_jsonl_records(target):
         if record.get("status") == "filled":
             count += 1
     return count
+
+
+# ---------------------------------------------------------------------------
+# Settlement stats (settlements.jsonl-derived) — PR2
+# ---------------------------------------------------------------------------
+
+
+def _resolve_settlements_path() -> Path:
+    """Return ``BOT_DATA_DIR/settlements.jsonl``, matching the writer
+    side at ``utils/settlements.py:_resolve_settlements_path``."""
+    return Path(os.environ.get("BOT_DATA_DIR", "data")) / "settlements.jsonl"
+
+
+def compute_win_rate(path: Optional[Path] = None) -> float:
+    """Read ``settlements.jsonl`` and compute the all-time win rate over
+    the file, returned as a **PERCENTAGE on a 0–100 scale** (e.g.
+    ``50.0`` for half wins, ``100.0`` for all wins).
+
+    Scale (LOCKED cross-repo contract): 0–100, NOT 0–1. The dashboard
+    renders this value with a literal "%" suffix and does NOT multiply
+    by 100 itself; returning a 0–1 fraction would display 100× too
+    small. Do not change this without coordinating with the dashboard
+    side.
+
+    Semantics (locked):
+      - Win: row with ``pnl > 0``
+      - Loss: row with ``pnl < 0``
+      - Break-even: row with ``pnl == 0`` — EXCLUDED from both
+        numerator and denominator (neither win nor loss).
+      - Returns ``wins / (wins + losses) * 100``.
+
+    Returns ``0.0`` when:
+      - The file is missing or empty
+      - No rows have non-zero pnl (denominator would be 0)
+      - All rows are break-evens
+
+    No caching — file is read on demand per call. Settlement cadence
+    is low (markets resolve infrequently) so this is cheap.
+    """
+    target = path if path is not None else _resolve_settlements_path()
+    wins = 0
+    losses = 0
+    for record in _iter_jsonl_records(target):
+        pnl_raw = record.get("pnl")
+        try:
+            pnl = float(pnl_raw) if pnl_raw is not None else 0.0
+        except (TypeError, ValueError):
+            continue
+        if pnl > 0.0:
+            wins += 1
+        elif pnl < 0.0:
+            losses += 1
+        # pnl == 0.0 → excluded
+    denom = wins + losses
+    if denom == 0:
+        return 0.0
+    return wins / denom * 100
+
+
+def compute_streak(path: Optional[Path] = None) -> int:
+    """Read ``settlements.jsonl`` in chronological order; count
+    consecutive same-sign settlement outcomes ending at the most
+    recent row.
+
+    Semantics (locked):
+      - SIGNED return: positive integer = current win-streak length,
+        negative integer = current loss-streak length.
+      - Break-even row (``pnl == 0``) BREAKS the streak. If the most
+        recent row is a break-even, return ``0``.
+      - If the file is missing or empty, return ``0``.
+
+    Zero semantics: ``0`` is overloaded — it means EITHER "no
+    settlements on file" OR "most-recent settlement was a break-even"
+    (both reset the dashboard's streak display to zero). This
+    overload is intentional and matches the dashboard's natural
+    reading of "no current streak to display."
+
+    Order: relies on ``settlements.jsonl`` being append-only
+    (``utils.settlements.persist_settlement`` always opens with mode
+    ``"a"``), so file order is chronological. No explicit ts sort
+    needed; the writer preserves order by construction.
+    """
+    target = path if path is not None else _resolve_settlements_path()
+    records = list(_iter_jsonl_records(target))
+    if not records:
+        return 0
+    # Most recent first
+    latest = records[-1]
+    try:
+        latest_pnl = float(latest.get("pnl", 0.0))
+    except (TypeError, ValueError):
+        return 0
+    if latest_pnl == 0.0:
+        return 0  # break-even at most recent → no current streak
+    sign = 1 if latest_pnl > 0 else -1
+    # Count consecutive same-sign rows from the end
+    count = 0
+    for record in reversed(records):
+        pnl_raw = record.get("pnl")
+        try:
+            pnl = float(pnl_raw) if pnl_raw is not None else 0.0
+        except (TypeError, ValueError):
+            break
+        if pnl == 0.0:
+            break  # break-even breaks the streak
+        row_sign = 1 if pnl > 0 else -1
+        if row_sign != sign:
+            break
+        count += 1
+    return sign * count

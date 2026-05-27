@@ -110,9 +110,18 @@ class TestSnapshotHandler:
         )
         assert resp.status == 401
 
-    async def test_snapshot_body_globalstats_present(self, test_client, bot_config):
+    async def test_snapshot_body_globalstats_present(
+        self, test_client, bot_config, tmp_path, monkeypatch
+    ):
         """v0.2.9 contract shape: 8-field globalStats; lastUpdatedAt lives
-        inside globalStats (not at snapshot root) per audit row A.2."""
+        inside globalStats (not at snapshot root) per audit row A.2.
+
+        Isolates BOT_DATA_DIR to tmp_path so the three file-derived
+        GlobalStats fields (winRate, totalTrades, streak — wired in PR1
+        and PR2 of the profitability epic) read an empty directory and
+        return their deterministic zero defaults, regardless of any
+        residual data/{trades,settlements}.jsonl in the working tree."""
+        monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
         resp = await test_client.get(
             "/dashboard/snapshot", headers=_auth_headers(bot_config)
         )

@@ -42,6 +42,8 @@ from api.state import BotState
 from utils.derived_stats import (
     compute_pnl_all_time,
     compute_pnl_month,
+    compute_streak,
+    compute_win_rate,
     count_total_trades,
 )
 from utils.equity_curve import compute_monthly_pnl
@@ -251,9 +253,9 @@ def _build_snapshot(snap: BotState, config: Any) -> DashboardSnapshot:
             pnlToday=day_pnl,
             pnlMonth=compute_pnl_month(snap.equity_history),
             pnlAllTime=compute_pnl_all_time(snap.equity_history),  # rolling ~6.5-month window (equity_history deque maxlen=200); not true all-time
-            winRate=0.0,             # Deferred to PR2 — needs settlement-persistence pipeline (no closed-position win/loss tracking today)
+            winRate=compute_win_rate(),
             totalTrades=count_total_trades(),
-            streak=0,                # Deferred to PR2 — same blocker as winRate (needs ordered closed-position outcomes)
+            streak=compute_streak(),
             # v0.2.9 3d-pre fix: ship live epoch ms, not snap.last_updated_at_ms
             # (which sits at 0 until a fill/heartbeat lands). Dashboard's
             # refreshDashboard.ts stale-snapshot gate (BOT_CONTRACT.md v1.0

@@ -114,6 +114,18 @@ async def resolution_polling_loop(
                 risk.on_settlement(ev.market_id, ev.resolved_outcome)
                 eq_after = risk.equity
                 pnl = eq_after - eq_before
+                # PR2: persist settlement outcome to BOT_DATA_DIR/settlements.jsonl
+                # for compute_win_rate / compute_streak on the snapshot read path.
+                # Reuses the existing `pnl` (caller equity delta — non-lossy because
+                # risk.on_settlement is sync, no await between eq_before/eq_after).
+                # Fire-and-forget; never raises. No risk_manager.py touch.
+                from utils.settlements import persist_settlement
+                persist_settlement(
+                    market_id=ev.market_id,
+                    resolved_outcome=ev.resolved_outcome,
+                    pnl=pnl,
+                    equity_after=eq_after,
+                )
                 logger.info(
                     "market_resolved",
                     market_id=ev.market_id,

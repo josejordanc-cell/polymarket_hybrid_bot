@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -27,8 +28,13 @@ def _make_config(**kwargs: object) -> BotConfig:
 
 
 @pytest.mark.asyncio
-async def test_resolution_poll_settles_yes_and_updates_equity(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resolution_poll_settles_yes_and_updates_equity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     configure_logging("CRITICAL")
+    # Isolate BOT_DATA_DIR so PR2's persist_settlement hook in
+    # resolution_polling_loop writes to tmp_path, not working-tree data/.
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
 
     cfg = _make_config(resolution_poll_seconds=60.0)
     risk = RiskManager(cfg)
@@ -88,8 +94,15 @@ async def test_resolution_poll_settles_yes_and_updates_equity(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_resolution_poll_five_failures_degraded_alert_and_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resolution_poll_five_failures_degraded_alert_and_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     configure_logging("CRITICAL")
+    # Isolate BOT_DATA_DIR for hermeticity consistency. This test's poll
+    # always raises (no settlements processed → no persist_settlement call
+    # → no write would happen even without the monkeypatch), but the
+    # isolation pattern stays consistent across the file.
+    monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
 
     cfg = _make_config(resolution_poll_seconds=60.0)
     risk = RiskManager(cfg)
