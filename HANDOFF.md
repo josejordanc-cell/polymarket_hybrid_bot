@@ -10,7 +10,7 @@ First-time on a fresh host: `cp .env.example .env`, fill secrets, `chmod 600 .en
 
 ## Current authoritative state (2026-06-07)
 
-**Code:** `main` HEAD = `57d8b18`; **480 tests green** (local + CI run `27096324537`).
+**Code:** `main` HEAD = `f84c2f1`; **480 tests green** (local + CI run `27096324537`). (The 4 commits since the deployed `57d8b18` — `f02a443`/`2a67f2b`/`9145b92`/`f84c2f1` — are docs/template/docstring drift fixes with no logic change; the deployed code + droplet remain at `57d8b18` / image `89676eb4`, unchanged.)
 `risk_manager.py` is FENCED (read-only) — the `7255010` lift below was a single-change
 exception and is now closed.
 
