@@ -1046,6 +1046,144 @@ async def trigger_fill_handler(
 
 
 # ---------------------------------------------------------------------------
+# POST /debug/trigger-settlement — settlement verification hatch
+# ---------------------------------------------------------------------------
+
+
+class TriggerSettlementRequest(BaseModel):
+    """Request body for POST /debug/trigger-settlement.
+
+    Seeds a BUY position on ``outcome`` then settles it. ``win`` controls
+    whether the seeded outcome is the winning one:
+      * win=True  → seeded outcome wins   → realised_pnl += size*(1-price) > 0
+      * win=False → the other outcome wins → realised_pnl += -size*price   < 0
+
+    ``price`` is strictly < 1.0: at price==1.0 a win yields size*(1-1)=0
+    (break-even), which ``compute_win_rate`` / ``compute_streak`` EXCLUDE —
+    that would defeat the hatch, so it is rejected at validation.
+    """
+
+    market_id: str = Field(min_length=1)
+    outcome: Literal["YES", "NO"]
+    size: float = Field(gt=0)
+    price: float = Field(gt=0, lt=1.0)
+    strategy: str = Field(min_length=1)
+    win: bool
+
+
+async def trigger_settlement_handler(
+    request: web.Request, state: BotState, config: Any, risk: Any
+) -> web.Response:
+    """POST /debug/trigger-settlement — narrow sim-only settlement hatch.
+
+    Sim-only (404 in live, BEFORE auth) + Bearer-authed — same security
+    surface as ``/debug/trigger-fill``. Seeds an open position via
+    ``risk.on_fill`` (hardcoded ``side="BUY"`` — a SELL with no position
+    creates nothing), then settles it via ``risk.on_settlement``, exactly
+    replicating the corrected ``resolution_polling_loop`` realised_pnl-delta
+    capture (main.py:113-… after commit e11f210):
+    ``rp_before = daily_pnl_snapshot().realised_pnl_usd`` → ``on_settlement``
+    → ``eq_after = equity`` → ``pnl = daily_pnl_snapshot().realised_pnl_usd -
+    rp_before`` → ``persist_settlement``. So it MUTATES LIVE RISK STATE
+    (equity / open_positions / realised_pnl) by design and writes a
+    ``settlements.jsonl`` line — moving winRate / streak without waiting for
+    a real Gamma resolution.
+
+    Deliberate choices:
+      * Seeds ONLY via on_fill — does NOT call persist_fill /
+        append_state_fill_record, so no spurious ``trades.jsonl`` row; we
+        want the open position to exist, not a recorded fill.
+      * Bypasses the real Gamma poll (``poll_market_resolutions``) entirely —
+        the request supplies the market and winning outcome directly.
+      * ``win`` chooses the winning outcome: at price < 1.0 a win persists
+        pnl > 0 and a loss persists pnl < 0 (the request model rejects
+        price == 1.0, which would make a win break-even).
+      * All public surface — on_fill / on_settlement / daily_pnl_snapshot /
+        equity. ``risk_manager.py`` is FENCED and untouched.
+    """
+    # Security gate 1: 404 in non-sim mode. Check BEFORE auth so live
+    # deployments don't even acknowledge the endpoint's existence.
+    if not _verify_debug_mode(config):
+        return web.Response(status=404, text="Not Found")
+
+    # Security gate 2: Bearer auth.
+    if not verify_bearer(request.headers, config):
+        return web.Response(status=401, text="Unauthorized")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text="Invalid JSON")
+
+    try:
+        req = TriggerSettlementRequest.model_validate(body)
+    except ValidationError as exc:
+        return web.Response(status=400, text=str(exc))
+
+    # Should never happen in sim (server.py always stashes risk there),
+    # but fail loud rather than silently no-op the accounting.
+    if risk is None:
+        return web.Response(
+            status=500, text="trigger-settlement: live risk unavailable"
+        )
+
+    # Lazy imports (mirror trigger_fill_handler): keep module-load light and
+    # avoid an import cycle with the FENCED risk_manager module.
+    from utils.settlements import persist_settlement
+    from utils.types import OrderIntent
+
+    # Seed the position. side="BUY" is required: on_fill's SELL branch with
+    # no existing position creates nothing. signal_reference_price=price is
+    # harmless symmetry with trigger-fill (no correlation call here).
+    intent = OrderIntent(
+        market_id=req.market_id,
+        side="BUY",
+        outcome=req.outcome,
+        size=req.size,
+        price=req.price,
+        strategy=req.strategy,
+        signal_reference_price=req.price,
+    )
+    risk.on_fill(intent, fill_price=req.price, filled_size=req.size)
+
+    # win=True → the seeded outcome wins; win=False → the other one wins.
+    winning_outcome = (
+        req.outcome if req.win else ("NO" if req.outcome == "YES" else "YES")
+    )
+
+    # Replicate the corrected resolution_polling_loop capture verbatim
+    # (main.py:113-124): realised_pnl delta across the sync on_settlement.
+    rp_before = risk.daily_pnl_snapshot().realised_pnl_usd
+    risk.on_settlement(req.market_id, winning_outcome)
+    eq_after = risk.equity
+    pnl = risk.daily_pnl_snapshot().realised_pnl_usd - rp_before
+
+    persist_settlement(
+        market_id=req.market_id,
+        resolved_outcome=winning_outcome,
+        pnl=pnl,
+        equity_after=eq_after,
+    )
+
+    logger.info(
+        "debug_settlement_triggered",
+        market_id=req.market_id,
+        win=req.win,
+        pnl=pnl,
+    )
+
+    return web.json_response(
+        {
+            "status": "settled",
+            "market_id": req.market_id,
+            "win": req.win,
+            "pnl": pnl,
+            "equity_after": eq_after,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Closure factory + route registration
 # ---------------------------------------------------------------------------
 
@@ -1129,4 +1267,13 @@ def setup_routes(
     app.router.add_post(
         "/debug/trigger-fill",
         _make_debug_handler(trigger_fill_handler, state, config, risk),
+    )
+    # POST /debug/trigger-settlement — sim-only settlement verification
+    # hatch. Same 404-gate + Bearer-auth surface; seeds a position via
+    # risk.on_fill then settles via risk.on_settlement, replicating the
+    # corrected resolution_polling_loop realised_pnl-delta capture. Uses
+    # _make_debug_handler to thread the live RiskManager.
+    app.router.add_post(
+        "/debug/trigger-settlement",
+        _make_debug_handler(trigger_settlement_handler, state, config, risk),
     )
