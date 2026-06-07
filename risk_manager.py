@@ -265,8 +265,16 @@ class RiskManager:
                 pos = s.open_positions[key]
                 total_qty = pos.quantity + filled_size
                 avg = (pos.avg_price * pos.quantity + fill_price * filled_size) / total_qty
+                # Dominant-by-quantity strategy attribution (interim single-label fix):
+                # a market_id+outcome key holds ONE Position with one strategy slot, so a
+                # merge across strategies must pick one label. Attribute to whichever
+                # contributed more quantity; tie -> keep existing (no flip on equal fills).
+                # Compare incoming filled_size vs the PRE-merge existing pos.quantity.
+                merged_strategy = (
+                    intent.strategy if filled_size > pos.quantity else pos.strategy
+                )
                 s.open_positions[key] = pos.model_copy(
-                    update={"quantity": total_qty, "avg_price": avg}
+                    update={"quantity": total_qty, "avg_price": avg, "strategy": merged_strategy}
                 )
             else:
                 s.open_positions[key] = Position(
