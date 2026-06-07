@@ -11,10 +11,12 @@ asyncio loop. Closes 3 of the 5 ``GlobalStats`` zero-stubs at
 - ``pnlAllTime`` ← ``compute_pnl_all_time(equity_history)``
 - ``totalTrades`` ← ``count_total_trades()``
 
-The remaining two stubs (``winRate``, ``streak``) need closed-position
-win/loss outcomes which require a settlement-persistence pipeline that
-does not exist yet — DEFERRED to PR2. Those two stay as literal ``0.0``
-/ ``0`` in this PR.
+The remaining two stubs (``winRate``, ``streak``) needed closed-position
+win/loss outcomes from a settlement-persistence pipeline. That pipeline
+shipped in PR2 (``9e26fae``): ``compute_win_rate`` (0–100) and
+``compute_streak`` (signed) were added to THIS module alongside the
+``utils/settlements.py`` writer, so winRate/streak are now live — no
+longer literal ``0.0`` / ``0`` stubs.
 
 Data sources used (all available today; no fence touch):
 

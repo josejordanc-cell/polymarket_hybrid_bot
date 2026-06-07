@@ -16,12 +16,13 @@ Rough effort and dependencies. Dates relative to **2026-05-02**.
 > `winRate` (0–100 percentage) and `streak` (signed) via a new
 > settlement-persistence pipeline (`utils/settlements.py`) and made the
 > suite hermetic at 464 passing. **GlobalStats epic COMPLETE.** Droplet
-> redeployed to `2f8bcac` (image `4cff62dd`). Two PASSIVE owed-gaps
-> remain (no action required): (a) `b1-fill` runtime obs — await a
-> natural sim fill to populate `trades.jsonl` → `totalTrades` /
-> `fills[]` go live; (b) PR2 runtime obs — await a real market
-> resolution to populate `settlements.jsonl` → `winRate` / `streak`
-> go non-zero. Items marked **DONE** below are already in `main`; the
+> redeployed to `57d8b18` (image `sha256:89676eb4`). The two formerly-PASSIVE
+> owed-gaps are now **CLOSED this session** — on-demand `/debug/trigger-fill`
+> (`4457c97`) + `/debug/trigger-settlement` (`00dc0e5`) hatches populate
+> `trades.jsonl` / `settlements.jsonl` deterministically, and the
+> settlement-pnl round-trip fix (`e11f210`) + strategy-merge donut fix
+> (`7255010`) shipped; live settlement smoke verified `winRate` 0→100→50.
+> Items marked **DONE** below are already in `main`; the
 > live priorities are the still-open items + anything new captured under
 > `CHANGELOG.md` `[Unreleased]`. The §4 "Dashboard integration" block is
 > superseded by the v0.2.9 wave — see CHANGELOG and `.swarm-decisions.md`

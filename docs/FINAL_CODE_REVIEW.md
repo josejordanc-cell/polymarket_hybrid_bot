@@ -50,7 +50,7 @@ Senior-engineer review of the Polymarket hybrid bot after Prompts 1–9. This do
 
 **What is fragile:** `get_config()` is LRU-cached; `BOT_MODE` must be set before first `get_config()` call (CLI does this). Changing experiment without process restart may not refresh cached config in odd embedding scenarios.
 
-**Technically correct but operationally questionable:** Logs without `experiment_id` (legacy) are invisible to `weekly_report.py` unless you pass a nonexistent id (report empty) — strict by design.
+**Superseded (`554e2a8`, 2026-05-02):** This described the v0.2.0 log-driven report keyed by `experiment_id`. `weekly_report.py` was rewritten to read `BOT_DATA_DIR/trades.jsonl` (flat-aggregate; flags `--weeks`/`--format`/`--stdout`/`-v` only) — there is no `experiment_id` filtering anymore. See `docs/HANDOFF.md` §`scripts/weekly_report.py`.
 
 ---
 
@@ -96,9 +96,9 @@ Senior-engineer review of the Polymarket hybrid bot after Prompts 1–9. This do
 
 ## 10. Weekly performance report (Prompt 7)
 
-**What works well:** Log-only; **strict `experiment_id`**: omitting `--experiment-id` lists candidates and exits 2. Arb PnL: FIFO pairing of YES/NO `trade_result` lines per market prefix, then per-bundle `leg_yes_pnl + leg_no_pnl + unwind_pnl`; `arb_unwind_skipped` tracked as notes, **not** in bundle PnL. Drawdown: peak-to-trough on `fill_recorded.equity` series only.
+**Superseded (`554e2a8`, 2026-05-02):** The log-driven `--experiment-id` FIFO arb-bundle model described here was retired. `weekly_report.py` now reads `BOT_DATA_DIR/trades.jsonl` and computes flat-aggregate PnL (sum of per-row `realized_pnl_usdc` / `unrealized_pnl_usdc` / `fees_paid_usdc`) — no `--experiment-id`, no FIFO leg-pairing, no `bundle_id` matching. Flags: `--weeks N` / `--format {md,json}` / `--stdout` / `-v`. See `docs/HANDOFF.md` §`scripts/weekly_report.py`.
 
-**What is fragile:** Orphan arb legs and unmatched completion queues surface as warnings in report JSON. Drawdown ignores equity before first `fill_recorded` in window.
+**No longer applicable (post-`554e2a8`):** The "orphan arb legs / unmatched completion queues surface as warnings" and "drawdown ignores equity before first `fill_recorded`" caveats belonged to the retired log-driven FIFO model. The `trades.jsonl` flat-aggregate report has no leg-pairing (hence no orphan-leg warnings) and derives drawdown / Sharpe / Sortino from the `equity_after` series via `utils.derived_stats.build_daily_equity_series_from_trades` (since `9f951e5`).
 
 **Technically correct but operationally questionable:** Market maker “horizon equity delta” is end-start equity, not inventory-adjusted MTM — documented in report output as simplified.
 
