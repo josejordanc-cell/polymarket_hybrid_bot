@@ -862,6 +862,190 @@ async def inject_log_handler(
 
 
 # ---------------------------------------------------------------------------
+# POST /debug/trigger-fill — live-accounting verification hatch
+# ---------------------------------------------------------------------------
+
+
+class TriggerFillRequest(BaseModel):
+    """Request body for POST /debug/trigger-fill.
+
+    Unlike ``InjectPositionRequest`` (which takes wire-form
+    ``strategy1``/``strategy2``/``strategy3``), ``strategy`` here is the
+    INTERNAL name (e.g. ``"intra_arbitrage"``). The live-accounting chain
+    — ``persist_fill`` / ``append_state_fill_record`` / ``broadcast_fill``
+    — consumes internal names and translates to wire form via
+    ``bot_to_dashboard`` at the dashboard boundary, exactly as
+    ``main.py:_exec_and_record`` passes ``intent.strategy``.
+    """
+
+    market_id: str = Field(min_length=1)
+    outcome: Literal["YES", "NO"]
+    side: Literal["BUY", "SELL"] = "BUY"
+    size: float = Field(gt=0)
+    price: float = Field(gt=0, le=1.0)
+    strategy: str = Field(min_length=1)
+
+
+async def trigger_fill_handler(
+    request: web.Request, state: BotState, config: Any, risk: Any
+) -> web.Response:
+    """POST /debug/trigger-fill — narrow live-accounting verification hatch.
+
+    Sim-only (404 in live, BEFORE auth) + Bearer-authed — same security
+    surface as ``/debug/inject-position``. Unlike the inject endpoints
+    (which mutate ``BotState`` only), this drives the REAL fill chain:
+    ``risk.on_fill`` → ``notify_fill_metrics`` → ``broadcast_fill`` →
+    ``persist_fill`` → ``append_state_fill_record`` →
+    ``record_fill_return_for_correlation``, the exact order of
+    ``main.py:_exec_and_record`` (minus ``mm.on_fill``, which is
+    loop-internal market-maker bookkeeping, not part of the persistence
+    chain). So it MUTATES LIVE RISK STATE (equity / open_positions) by
+    design and writes a ``trades.jsonl`` line — that is the whole point:
+    move ``globalStats`` without waiting for a real signal.
+
+    Deliberate choices:
+      * Bypasses ``executor.execute`` entirely — we synthesize an accepted
+        ``TradeResult`` directly so no order ever reaches the CLOB.
+      * Sets ``signal_reference_price = price`` on the synthetic intent so
+        ``record_fill_return_for_correlation`` takes its reference from the
+        intent and NEVER dereferences a market snapshot — that lets us pass
+        ``snapshot=None`` without synthesizing a ``MarketSnapshot``.
+      * Holds NO outer ``state.write_lock``: the only BotState mutation is
+        inside ``append_state_fill_record``, which acquires the (non-
+        reentrant) ``write_lock`` itself — wrapping it here would deadlock.
+        This mirrors ``_exec_and_record``, which also holds no lock around
+        this chain. ``risk_manager.py`` is FENCED and untouched.
+    """
+    # Security gate 1: 404 in non-sim mode. Check BEFORE auth so live
+    # deployments don't even acknowledge the endpoint's existence.
+    if not _verify_debug_mode(config):
+        return web.Response(status=404, text="Not Found")
+
+    # Security gate 2: Bearer auth.
+    if not verify_bearer(request.headers, config):
+        return web.Response(status=401, text="Unauthorized")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text="Invalid JSON")
+
+    try:
+        req = TriggerFillRequest.model_validate(body)
+    except ValidationError as exc:
+        return web.Response(status=400, text=str(exc))
+
+    # Should never happen in sim (server.py always stashes risk there),
+    # but fail loud rather than silently no-op the accounting.
+    if risk is None:
+        return web.Response(
+            status=500, text="trigger-fill: live risk unavailable"
+        )
+
+    # Lazy imports mirror main.py:_exec_and_record (imported inside run()):
+    # keeps module-load light and avoids any import cycle with the FENCED
+    # risk_manager module at routes_rest import time.
+    from observability.metrics_exporter import notify_fill_metrics
+    from risk_manager import POLYMARKET_FEE_PER_SIDE
+    from utils.fill_correlation import record_fill_return_for_correlation
+    from utils.fills import append_state_fill_record, broadcast_fill
+    from utils.trades import persist_fill
+    from utils.types import OrderIntent, TradeResult
+
+    # Synthetic intent. signal_reference_price = price (see docstring) so
+    # the correlation helper never reads a snapshot.
+    intent = OrderIntent(
+        market_id=req.market_id,
+        side=req.side,
+        outcome=req.outcome,
+        size=req.size,
+        price=req.price,
+        strategy=req.strategy,
+        signal_reference_price=req.price,
+    )
+    # Synthetic accepted fill — bypasses executor.execute deliberately.
+    result = TradeResult(
+        accepted=True, filled_size=req.size, fill_price=req.price
+    )
+
+    # Drive the real chain in _exec_and_record order (minus mm.on_fill).
+    risk.on_fill(
+        intent,
+        fill_price=result.fill_price or intent.price_rounded(),
+        filled_size=result.filled_size,
+    )
+    notify_fill_metrics(
+        intent.strategy,
+        intent.side,
+        intent.tif,
+        result.fill_price,
+        result.filled_size,
+    )
+    await broadcast_fill(
+        market_id=intent.market_id,
+        action=("UP" if intent.outcome == "YES" else "DOWN"),
+        price=float(
+            result.fill_price
+            if result.fill_price is not None
+            else intent.price_rounded()
+        ),
+        size=float(result.filled_size),
+        strategy=intent.strategy,
+        pnl=None,
+    )
+    _fill_px = float(
+        result.fill_price
+        if result.fill_price is not None
+        else intent.price_rounded()
+    )
+    persist_fill(
+        market_id=intent.market_id,
+        outcome=intent.outcome,
+        side=intent.side,
+        strategy=intent.strategy,
+        fill_price=_fill_px,
+        filled_size=float(result.filled_size),
+        fee_usdc=_fill_px * float(result.filled_size) * POLYMARKET_FEE_PER_SIDE,
+        equity_after=float(risk.equity),  # read AFTER risk.on_fill mutated it
+        tif=intent.tif,
+        order_id=getattr(result, "order_id", None),
+    )
+    await append_state_fill_record(
+        state,
+        market_id=intent.market_id,
+        outcome=intent.outcome,
+        fill_price=_fill_px,
+        filled_size=float(result.filled_size),
+        strategy=intent.strategy,
+    )
+    # snapshot=None is safe: signal_reference_price is set, so the helper
+    # never dereferences the snapshot (see fill_correlation.py:29-31).
+    record_fill_return_for_correlation(
+        risk,
+        intent,
+        None,
+        result.fill_price,
+        result.filled_size,
+    )
+
+    logger.info(
+        "debug_fill_triggered",
+        market_id=req.market_id,
+        strategy=req.strategy,
+        size=req.size,
+        price=req.price,
+    )
+
+    return web.json_response(
+        {
+            "status": "filled",
+            "market_id": req.market_id,
+            "equity_after": float(risk.equity),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # Closure factory + route registration
 # ---------------------------------------------------------------------------
 
@@ -872,7 +1056,24 @@ def _make_handler(fn: Any, state: BotState, config: Any) -> Any:
     return _handler
 
 
-def setup_routes(app: web.Application, state: BotState, config: Any) -> None:
+def _make_debug_handler(
+    fn: Any, state: BotState, config: Any, risk: Any
+) -> Any:
+    """Closure factory for debug handlers that also need the live risk.
+
+    Additive sibling of ``_make_handler`` — the 7 existing
+    ``_make_handler(...)`` registrations are unchanged. Only
+    ``/debug/trigger-fill`` uses this, because it is the sole handler that
+    drives ``risk.on_fill``.
+    """
+    async def _handler(request: web.Request) -> web.Response:
+        return await fn(request, state, config, risk)
+    return _handler
+
+
+def setup_routes(
+    app: web.Application, state: BotState, config: Any, risk: Any = None
+) -> None:
     """Register the three D.2.2 REST routes onto an aiohttp Application.
 
     v0.2.9 3h adds two sim-mode-only debug routes
@@ -918,4 +1119,14 @@ def setup_routes(app: web.Application, state: BotState, config: Any) -> None:
     app.router.add_post(
         "/debug/inject-log",
         _make_handler(inject_log_handler, state, config),
+    )
+    # POST /debug/trigger-fill — sim-only live-accounting verification
+    # hatch. Same 404-gate + Bearer-auth surface as the inject endpoints,
+    # but drives the REAL risk.on_fill → persist_fill → ... chain, so it
+    # needs the live RiskManager. Uses _make_debug_handler (not
+    # _make_handler) to thread `risk` through. risk is None in non-sim/
+    # test wiring; the handler 404s before reading it in non-sim mode.
+    app.router.add_post(
+        "/debug/trigger-fill",
+        _make_debug_handler(trigger_fill_handler, state, config, risk),
     )

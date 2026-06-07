@@ -55,6 +55,13 @@ logger = structlog.get_logger(__name__)
 # NotAppKeyWarning emitted by aiohttp when string keys are used.
 EMITTER_KEY: web.AppKey[Emitter] = web.AppKey("emitter", Emitter)
 CONFIG_KEY: web.AppKey = web.AppKey("config")
+# Live RiskManager, stashed by api/server.py:run() so the sim-only
+# POST /debug/trigger-fill handler can drive the real risk.on_fill
+# accounting chain. May be None in non-sim/live deployments (the
+# endpoint 404s before this key is ever read), and None in tests that
+# omit risk. Untyped AppKey (kept loose like CONFIG_KEY) to avoid an
+# import of the FENCED risk_manager module at this boundary.
+RISK_KEY: web.AppKey = web.AppKey("risk")
 
 
 # Per BOT_CONTRACT.md §3.2: the 4001 close code is reserved for

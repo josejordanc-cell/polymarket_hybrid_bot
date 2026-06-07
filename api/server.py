@@ -27,7 +27,7 @@ from aiohttp import web
 
 from api.emit import Emitter
 from api.routes_rest import setup_routes
-from api.routes_ws import CONFIG_KEY, EMITTER_KEY, ws_handler
+from api.routes_ws import CONFIG_KEY, EMITTER_KEY, RISK_KEY, ws_handler
 from api.state import BotState
 
 logger = structlog.get_logger(__name__)
@@ -68,7 +68,7 @@ async def run(
     second `setup_routes` call for WS routes, without changing this entry.
     """
     app = web.Application()
-    setup_routes(app, state, config)
+    setup_routes(app, state, config, risk)
 
     # Emitter + WS route are owned by run() for the lifetime of the
     # server task. The emitter is attached to the Application via
@@ -135,6 +135,11 @@ async def run(
         risk_mirror_task = None
 
     app[CONFIG_KEY] = config
+    # Stash the live RiskManager so the sim-only POST /debug/trigger-fill
+    # handler can drive the real risk.on_fill accounting chain. May be
+    # None (non-sim/live, or tests that omit risk); the endpoint 404s in
+    # non-sim mode before this key is read, so a None value is harmless.
+    app[RISK_KEY] = risk
     app.router.add_get("/ws", ws_handler)
 
     api_cfg = getattr(config, "http_api", None)
