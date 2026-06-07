@@ -46,7 +46,7 @@ The bot exposes **Prometheus `/metrics` on port 9091** (`deploy/docker-compose.y
 - **Local scrape only (recommended):** Run Prometheus/Grafana on the same droplet or use an SSH tunnel; no UFW change.
 - **Remote scrape:** Restrict source IP, e.g. `ufw allow from <monitoring-ip> to any port 9091 proto tcp`.
 
-Do **not** expose 9091 to `0.0.0.0/0` without auth or IP allowlisting.
+Do **not** expose 9091 to `0.0.0.0/0`: `/metrics` has no app-level auth and binds loopback only (`127.0.0.1`, T1/PR#9), so the remote-scrape controls are the UFW source-IP allowlist or SSH tunnel above, or an authenticating reverse proxy.
 
 ---
 
