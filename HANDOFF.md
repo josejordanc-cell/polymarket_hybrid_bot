@@ -8,6 +8,49 @@ git pull && ./deploy/rebuild.sh
 
 First-time on a fresh host: `cp .env.example .env`, fill secrets, `chmod 600 .env`, then `./deploy/rebuild.sh`.
 
+## Current authoritative state (2026-06-07)
+
+**Code:** `main` HEAD = `57d8b18`; **480 tests green** (local + CI run `27096324537`).
+`risk_manager.py` is FENCED (read-only) — the `7255010` lift below was a single-change
+exception and is now closed.
+
+**Droplet:** `root@157.230.63.174:/opt/polymarket_hybrid_bot`, deploy lane `main`,
+deployed at `57d8b18` (image `sha256:89676eb4…`), healthy. Rollback ref
+`sha256:2405f5fd…` recorded at `/root/rollback_image_id.txt`. Full redeploy facts in
+"Droplet state (2026-06-07)" below.
+
+**Shipped this session:**
+- `/debug/trigger-fill` (`4457c97`) and `/debug/trigger-settlement` (`00dc0e5`) —
+  sim-only verification hatches (404 in live, bearer-authed) that drive the real
+  fill / settlement accounting on demand.
+- Settlement-P&L round-trip fix (`e11f210`) — `resolution_polling_loop` now persists
+  the `realised_pnl` delta, not the equity delta, so losing settlements count as
+  losses; **winRate is no longer structurally inflated**.
+- Strategy-merge donut fix (`7255010`, the one scoped fence-lift, now re-locked) —
+  `on_fill`'s BUY merge attributes the merged position's `strategy` by dominant
+  quantity (tie → keep existing) instead of silently keeping the first opener's tag.
+
+**"Make profitability measurable" epic:** DONE + verified live — winRate moved
+0 → 100 → 50 on the droplet settlement smoke.
+
+**Open / deferred:**
+- (a) Per-strategy attribution **option D** — the dominant-by-quantity donut fix
+  (`7255010`) is interim/single-label. Revisit (split positions per strategy) only if
+  two strategies co-occupying one `market_id+outcome` key proves common in practice.
+- (b) Donut strategy-id — the dashboard color/name map matches the bot's contractual
+  `strategy1`/`strategy2`/`strategy3` wire vocabulary: **no drift at the contract
+  level, no dashboard change needed** (`intra_arbitrage` / `momentum_latency` are
+  display names for those ids, not wire values). **OPEN (bot-side):** a droplet probe
+  of the live `openPositions[].strategy` field to confirm `7255010` still emits
+  contract-conforming `strategy1/2/3` (cosmetic-only if it drifted — a generic-color
+  slice + raw-id label). *Optional dashboard hardening (separate):*
+  `OpenPositionSchema.strategy` is a free `z.string()`, not the enum — tightening it
+  toward `StrategyIdSchema` (or a `.refine` that logs unknown ids) would surface
+  non-conforming tags instead of silently rendering the fallback.
+- (c) Dependabot clean-PR merge — pending regeneration of the PR.
+- (d) Droplet `*** System restart required ***` — deferred to a maintenance window.
+- (e) Residual sim equity on the droplet — left as-is.
+
 ## What changed since v0.2.0
 
 > For releases after v0.2.1, see `CHANGELOG.md`. The list below is the original v0.2.1→v0.2.0 delta, preserved for history.
@@ -37,7 +80,7 @@ First-time on a fresh host: `cp .env.example .env`, fill secrets, `chmod 600 .en
 | Polymarket WS **404** | REST polling fallback; not fixed in v0.2.1 |
 | Binance **451** | Geo / compliance; use non-US POP or disable feed; not fixed in v0.2.1 |
 | Image size | Slim runtime + venv; still monitor disk on 25 GB droplets |
-| Snapshot `positions[].strategy` mis-attribution | RiskManager `on_fill` BUY merge updates only `quantity`/`avg_price`, drops the 2nd strategy's tag; corrupt tag reaches the wire (`risk_manager.py:262-270` → `api/routes_rest.py:116`). Fix fenced — see CHANGELOG `[Unreleased]` Known issues + `.swarm-decisions.md`. |
+| ~~Snapshot `positions[].strategy` mis-attribution~~ — **RESOLVED `7255010`** | `on_fill`'s BUY merge now sets `strategy` by dominant quantity (tie → keep existing) in the merge branch of `risk_manager.py`; the corrected tag reaches the wire via `api/routes_rest.py:_build_open_position` (`:123`). Interim single-label fix — see Current-state Open/deferred (a) for the option-D split. |
 
 ## Triage runbook
 
@@ -126,7 +169,27 @@ re-cloned from scratch.
 
 ## Droplet state (2026-05-26)
 
+> **Superseded by "Droplet state (2026-06-07)" below.**
+
 Droplet (157.230.63.174) runs `main` @ `2f8bcac` (container image `polymarket_hybrid_bot:0.2.4`, content rebuilt to image ID `4cff62dd`), healthy. The redeploy from `swarm/team-b-phase-d @ 77b3ccd` (tag `v0.2.8`) was EXECUTED per `DROPLET_REDEPLOY.md` — the prior "PRODUCED but DEFERRED (not executed)" framing is RESOLVED. Redeploy chain (per `.swarm-decisions.md`): `77b3ccd` → `b8095bc` (row `b1-fill-runtime-update`) → `54cf1fc` (image `5f415e1a`; row `2b-polling-runtime-closed`) → `2f8bcac` (image `4cff62dd`; per `docs/NEXT_STEPS.md:19`). The 1 GB→2 GB RAM decision noted in the prior framing is no longer gating — the redeploys above were executed on the existing droplet sizing.
+
+## Droplet state (2026-06-07)
+
+Supersedes the 2026-05-26 block above. Droplet (`157.230.63.174`,
+`/opt/polymarket_hybrid_bot`) runs `main` @ `57d8b18`, container image
+`sha256:89676eb4…`, healthy; deploy lane is `main`. Rollback ref `sha256:2405f5fd…`
+recorded at `/root/rollback_image_id.txt` (re-run that image to roll back). CI run
+`27096324537` (480 green) gated this deploy.
+
+Carried-forward operational notes:
+- `*** System restart required ***` on the droplet — deferred to a maintenance
+  window (Open/deferred (d)).
+- Residual sim equity left as-is (Open/deferred (e)).
+- Network/upstream warnings (`Binance 451`, `Polymarket WS 404`) unchanged — REST
+  fallback in place.
+
+> Image digests (`89676eb4`, `2405f5fd`) and the CI run id are operator-supplied;
+> they describe droplet / registry / CI state and are not verifiable from this repo.
 
 ## Agent discipline
 
