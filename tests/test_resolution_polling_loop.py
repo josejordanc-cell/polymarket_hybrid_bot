@@ -9,7 +9,7 @@ driven directly with mocked dependencies.
 This test asserts end-to-end:
   1. poll_market_resolutions is called with the open-position market_ids
   2. For each resolving market, risk.on_settlement is invoked
-  3. The caller computes pnl = eq_after - eq_before from public risk.equity
+  3. The caller computes pnl = realised_pnl delta via daily_pnl_snapshot()
   4. persist_settlement appends a row to BOT_DATA_DIR/settlements.jsonl
   5. compute_win_rate and compute_streak see that row immediately
 """
@@ -36,6 +36,9 @@ from utils.derived_stats import compute_streak, compute_win_rate
 @dataclass
 class _StubPosition:
     market_id: str
+    outcome: str
+    quantity: float
+    avg_price: float
 
 
 @dataclass
@@ -47,21 +50,26 @@ class _StubResolutionEvent:
 
 
 class _StubRiskManager:
-    """Minimal stub exposing only the public surface
-    resolution_polling_loop touches: equity property, open_positions
-    property (dict of {key: position}), on_settlement(market_id,
-    resolved_outcome) method that mutates equity and pops positions."""
+    """Faithful mirror of the public surface resolution_polling_loop
+    touches, modelling on_settlement EXACTLY as risk_manager.py:322-332:
+    ``equity += proceeds`` (proceeds only) and
+    ``realised_pnl += proceeds - notional`` (the true round-trip P&L).
+    Exposes the ``equity`` / ``open_positions`` properties and
+    ``daily_pnl_snapshot()`` — the public realised-P&L accessor the fixed
+    loop reads. Modelling equity and realised_pnl as DISTINCT quantities
+    is the whole point: a loss moves realised_pnl negative while leaving
+    equity flat (proceeds=0), which the old equity-delta capture mistook
+    for break-even."""
 
     def __init__(
         self,
         equity: float,
-        open_positions: dict[str, _StubPosition],
-        pnl_on_settlement: dict[str, float],
+        positions: dict[str, _StubPosition],
+        realised_pnl: float = 0.0,
     ) -> None:
         self._equity = equity
-        self._open_positions = dict(open_positions)
-        # market_id → delta to apply to equity when on_settlement is called
-        self._pnl_on_settlement = dict(pnl_on_settlement)
+        self._open_positions = dict(positions)
+        self._realised_pnl = realised_pnl
         self.on_settlement_calls: list[tuple[str, str]] = []
 
     @property
@@ -72,17 +80,26 @@ class _StubRiskManager:
     def open_positions(self) -> dict[str, _StubPosition]:
         return dict(self._open_positions)
 
-    def on_settlement(self, market_id: str, resolved_outcome: str) -> None:
-        """Mutate equity by the pre-configured pnl for this market_id,
-        and remove the matching position(s). Matches the real
-        on_settlement's contract (sync, void return, mutates state)."""
-        self.on_settlement_calls.append((market_id, resolved_outcome))
-        delta = self._pnl_on_settlement.get(market_id, 0.0)
-        self._equity += delta
-        # Remove positions for this market
+    def daily_pnl_snapshot(self) -> SimpleNamespace:
+        """Public accessor mirrored from RiskManager.daily_pnl_snapshot();
+        resolution_polling_loop reads only ``realised_pnl_usd``."""
+        return SimpleNamespace(realised_pnl_usd=self._realised_pnl)
+
+    def on_settlement(self, market_id: str, winning_outcome: str) -> None:
+        """Mirror risk_manager.py:322-332: for each position on this
+        market, ``equity += proceeds`` and ``realised_pnl += proceeds -
+        notional``, then pop the position. proceeds = quantity if the
+        position's own outcome won, else 0 (sync, void return)."""
+        self.on_settlement_calls.append((market_id, winning_outcome))
         for key in list(self._open_positions.keys()):
-            if self._open_positions[key].market_id == market_id:
-                del self._open_positions[key]
+            pos = self._open_positions[key]
+            if pos.market_id != market_id:
+                continue
+            proceeds = pos.quantity * 1.0 if pos.outcome == winning_outcome else 0.0
+            pnl = proceeds - pos.quantity * pos.avg_price
+            self._equity += proceeds
+            self._realised_pnl += pnl
+            del self._open_positions[key]
 
 
 def _stub_config(poll_seconds: float = 0.01) -> SimpleNamespace:
@@ -140,10 +157,15 @@ async def test_winning_settlement_persists_and_compute_helpers_see_it(
     row; compute_win_rate sees 1.0; compute_streak sees +1."""
     monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
 
+    # Long YES @ 0.5, qty 100; resolves YES → win.
+    # realised_pnl delta = 100 - 100*0.5 = +50 (> 0).
     risk = _StubRiskManager(
         equity=1000.0,
-        open_positions={"0xabc_YES": _StubPosition(market_id="0xabc")},
-        pnl_on_settlement={"0xabc": 50.0},  # +50 on settlement
+        positions={
+            "0xabc_YES": _StubPosition(
+                market_id="0xabc", outcome="YES", quantity=100.0, avg_price=0.5
+            )
+        },
     )
     events = [_StubResolutionEvent(market_id="0xabc", resolved_outcome="YES")]
 
@@ -176,10 +198,17 @@ async def test_losing_settlement_persists_with_negative_pnl(
 
     monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
 
+    # Long NO @ 0.5, qty 50; market resolves YES → the NO leg loses.
+    # realised_pnl delta = 0 - 50*0.5 = -25 (< 0). Equity is UNCHANGED
+    # (proceeds=0) — the loss was already realised at fill time; the old
+    # equity-delta capture wrongly persisted this as pnl=0 (break-even).
     risk = _StubRiskManager(
         equity=1000.0,
-        open_positions={"0xabc_NO": _StubPosition(market_id="0xabc")},
-        pnl_on_settlement={"0xabc": -25.0},
+        positions={
+            "0xabc_NO": _StubPosition(
+                market_id="0xabc", outcome="NO", quantity=50.0, avg_price=0.5
+            )
+        },
     )
     events = [_StubResolutionEvent(market_id="0xabc", resolved_outcome="YES")]
 
@@ -192,7 +221,10 @@ async def test_losing_settlement_persists_with_negative_pnl(
     assert row["market_id"] == "0xabc"
     assert row["resolved_outcome"] == "YES"
     assert row["pnl"] == pytest.approx(-25.0)
-    assert row["equity_after"] == pytest.approx(975.0)
+    # equity += proceeds(0) → unchanged at 1000.0 (was 975.0; that
+    # assertion pinned the old equity-delta bug, where the persisted pnl
+    # WAS the equity delta. Post-fix the two are decoupled).
+    assert row["equity_after"] == pytest.approx(1000.0)
     assert row["winning"] is False
 
     assert compute_win_rate() == 0.0
@@ -210,8 +242,11 @@ async def test_no_open_positions_skips_settlement(
 
     risk = _StubRiskManager(
         equity=1000.0,
-        open_positions={"0xother_YES": _StubPosition(market_id="0xother")},
-        pnl_on_settlement={},
+        positions={
+            "0xother_YES": _StubPosition(
+                market_id="0xother", outcome="YES", quantity=10.0, avg_price=0.5
+            )
+        },
     )
     events = [_StubResolutionEvent(market_id="0xabc", resolved_outcome="YES")]
 
@@ -253,8 +288,7 @@ async def test_empty_open_positions_skips_polling(
 
     risk = _StubRiskManager(
         equity=1000.0,
-        open_positions={},  # empty
-        pnl_on_settlement={},
+        positions={},  # empty
     )
     config = _stub_config(poll_seconds=0.01)
 
@@ -286,13 +320,18 @@ async def test_multiple_settlements_in_one_poll(
     sees the most recent (signed)."""
     monkeypatch.setenv("BOT_DATA_DIR", str(tmp_path))
 
+    # 0xa: long YES @0.5 qty20 → resolves YES → win:  +20 - 20*0.5 = +10
+    # 0xb: long NO  @0.5 qty10 → resolves YES → loss:   0 - 10*0.5 =  -5
     risk = _StubRiskManager(
         equity=1000.0,
-        open_positions={
-            "0xa_YES": _StubPosition(market_id="0xa"),
-            "0xb_YES": _StubPosition(market_id="0xb"),
+        positions={
+            "0xa_YES": _StubPosition(
+                market_id="0xa", outcome="YES", quantity=20.0, avg_price=0.5
+            ),
+            "0xb_NO": _StubPosition(
+                market_id="0xb", outcome="NO", quantity=10.0, avg_price=0.5
+            ),
         },
-        pnl_on_settlement={"0xa": 10.0, "0xb": -5.0},  # win then loss
     )
     events = [
         _StubResolutionEvent(market_id="0xa", resolved_outcome="YES"),  # win

@@ -110,14 +110,20 @@ async def resolution_polling_loop(
             for ev in events:
                 if not any(p.market_id == ev.market_id for p in risk.open_positions.values()):
                     continue
-                eq_before = risk.equity
+                rp_before = risk.daily_pnl_snapshot().realised_pnl_usd
                 risk.on_settlement(ev.market_id, ev.resolved_outcome)
                 eq_after = risk.equity
-                pnl = eq_after - eq_before
+                # Round-trip settlement P&L = delta of realised_pnl across the
+                # (sync) on_settlement call. NOT the equity delta: on_settlement
+                # does `equity += proceeds` (proceeds only), so an equity delta
+                # zeroes losses (proceeds=0) into break-even, which winRate /
+                # streak then exclude — structurally inflating winRate.
+                # daily_pnl_snapshot() is a pure read (no day-reset side effect);
+                # the call is synchronous with no await between reads, so the
+                # delta is exact.
+                pnl = risk.daily_pnl_snapshot().realised_pnl_usd - rp_before
                 # PR2: persist settlement outcome to BOT_DATA_DIR/settlements.jsonl
                 # for compute_win_rate / compute_streak on the snapshot read path.
-                # Reuses the existing `pnl` (caller equity delta — non-lossy because
-                # risk.on_settlement is sync, no await between eq_before/eq_after).
                 # Fire-and-forget; never raises. No risk_manager.py touch.
                 from utils.settlements import persist_settlement
                 persist_settlement(

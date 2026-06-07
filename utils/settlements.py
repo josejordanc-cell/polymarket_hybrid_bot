@@ -9,8 +9,8 @@ read side that closes the last two ``GlobalStats`` zero-stubs
 (``winRate``, ``streak`` at ``api/routes_rest.py:249,251``).
 
 The PR2 recon confirmed the call site at ``main.py:113-116`` already
-captures per-settlement pnl via public ``risk.equity`` deltas:
-``pnl = eq_after - eq_before`` (non-lossy because
+captures per-settlement pnl via the public realised-P&L accessor
+``risk.daily_pnl_snapshot().realised_pnl_usd`` delta (non-lossy because
 ``risk.on_settlement`` is synchronous — no ``await`` between the two
 reads, so asyncio cooperative scheduling cannot interleave another
 task's ``risk._state`` mutation). This module is wired adjacent to
@@ -34,7 +34,7 @@ Row schema (6 fields, locked):
   ts                ISO 8601 UTC, millisecond precision, 'Z' suffix
   market_id         Polymarket market_id (full)
   resolved_outcome  "YES" / "NO" — the winning outcome
-  pnl               net pnl across both legs (caller's eq_after - eq_before)
+  pnl               net round-trip pnl across both legs (caller's realised_pnl delta)
   equity_after      risk.equity AFTER on_settlement mutated it
   winning           bool — ``pnl > 0`` — explicit for readability
                     (technically derivable from pnl; included for clarity)
@@ -82,7 +82,7 @@ def persist_settlement(
       ts                ISO 8601 UTC, millisecond precision, 'Z' suffix
       market_id         Polymarket market_id
       resolved_outcome  "YES" / "NO"
-      pnl               net pnl (caller-supplied; reuses main.py:116)
+      pnl               net round-trip pnl (caller-supplied; realised_pnl delta)
       equity_after      risk.equity after on_settlement
       winning           bool, derived from pnl > 0
 
